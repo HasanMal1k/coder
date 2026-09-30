@@ -1,16 +1,26 @@
-package repository
+package store
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
-	"github.com/HasanMal1k/coder/internal/auth/model"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+type User struct {
+	ID           string
+	Email        string
+	PasswordHash string
+	Organization string
+	Subscription string
+	DisplayName  string
+	CreatedAt    time.Time
+}
 
 var (
 	// ErrEmailTaken is returned when the email UNIQUE constraint rejects an insert.
@@ -30,8 +40,8 @@ func NewUserRepository(db *pgxpool.Pool) *UserRepository {
 }
 
 // CreateUser inserts a new user. passwordHash must already be bcrypt-hashed by the caller.
-func (r *UserRepository) CreateUser(ctx context.Context, email, displayName, organization, subscription, passwordHash string) (*model.User, error) {
-	u := &model.User{
+func (r *UserRepository) CreateUser(ctx context.Context, email, displayName, organization, subscription, passwordHash string) (*User, error) {
+	u := &User{
 		ID:           uuid.NewString(),
 		Email:        email,
 		DisplayName:  displayName,
@@ -59,8 +69,8 @@ func (r *UserRepository) CreateUser(ctx context.Context, email, displayName, org
 
 // GetUserByEmail looks up a user by email, for login. It does not check the
 // password — the caller compares the returned PasswordHash with bcrypt.
-func (r *UserRepository) GetUserByEmail(ctx context.Context, email string) (*model.User, error) {
-	var u model.User
+func (r *UserRepository) GetUserByEmail(ctx context.Context, email string) (*User, error) {
+	var u User
 
 	err := r.db.QueryRow(ctx,
 		`SELECT id, email, password_hash, organization, subscription, display_name, created_at
@@ -78,8 +88,8 @@ func (r *UserRepository) GetUserByEmail(ctx context.Context, email string) (*mod
 	return &u, nil
 }
 
-func (r *UserRepository) GetUserByID(ctx context.Context, id string) (*model.User, error) {
-	var u model.User
+func (r *UserRepository) GetUserByID(ctx context.Context, id string) (*User, error) {
+	var u User
 
 	err := r.db.QueryRow(ctx,
 		`SELECT id, email, password_hash, organization, subscription, display_name, created_at

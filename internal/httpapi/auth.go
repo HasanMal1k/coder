@@ -1,15 +1,16 @@
-package handler
+package httpapi
 
 import (
 	"encoding/json"
 	"errors"
 	"net/http"
 
-	"github.com/HasanMal1k/coder/internal/auth/service"
+	"github.com/HasanMal1k/coder/internal/auth"
+	"github.com/HasanMal1k/coder/internal/middleware"
 )
 
-type UserHandler struct {
-	svc *service.UserService
+type AuthHandler struct {
+	svc *auth.Service
 }
 
 type RegisterRequest struct {
@@ -41,13 +42,13 @@ type ErrorResponse struct {
 	Error string `json:"error"`
 }
 
-func NewUserHandler(svc *service.UserService) (h *UserHandler) {
-	return &UserHandler{
+func NewAuthHandler(svc *auth.Service) *AuthHandler {
+	return &AuthHandler{
 		svc: svc,
 	}
 }
 
-func (h *UserHandler) Register(w http.ResponseWriter, r *http.Request) {
+func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	var userData RegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&userData); err != nil {
 		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid request body"})
@@ -57,7 +58,7 @@ func (h *UserHandler) Register(w http.ResponseWriter, r *http.Request) {
 	token, user, err := h.svc.Register(r.Context(), userData.Email, userData.DisplayName, userData.Password, userData.Organization)
 	if err != nil {
 		switch {
-		case errors.Is(err, service.ErrEmailTaken):
+		case errors.Is(err, auth.ErrEmailTaken):
 			writeJSON(w, http.StatusConflict, ErrorResponse{Error: "email already registered"})
 		default:
 			writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "internal server error"})
@@ -77,7 +78,7 @@ func (h *UserHandler) Register(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *UserHandler) Login(w http.ResponseWriter, r *http.Request) {
+func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var userData LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&userData); err != nil {
 		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid request body"})
@@ -87,7 +88,7 @@ func (h *UserHandler) Login(w http.ResponseWriter, r *http.Request) {
 	token, user, err := h.svc.Login(r.Context(), userData.Email, userData.Password)
 	if err != nil {
 		switch {
-		case errors.Is(err, service.ErrInvalidCredentials):
+		case errors.Is(err, auth.ErrInvalidCredentials):
 			writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "invalid email or password"})
 		default:
 			writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "internal server error"})
@@ -109,8 +110,8 @@ func (h *UserHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 }
 
-func (h *UserHandler) Me(w http.ResponseWriter, r *http.Request) {
-	user, ok := UserFromContext(r.Context())
+func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.UserFromContext(r.Context())
 	if !ok {
 		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "not authenticated"})
 		return

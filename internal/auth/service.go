@@ -1,4 +1,4 @@
-package service
+package auth
 
 import (
 	"context"
@@ -7,8 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/HasanMal1k/coder/internal/auth/model"
-	"github.com/HasanMal1k/coder/internal/auth/repository"
+	"github.com/HasanMal1k/coder/internal/store"
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -29,21 +28,21 @@ var ErrEmailTaken = errors.New("email already registered")
 // parse, is expired, or was signed with an unexpected method.
 var ErrInvalidToken = errors.New("invalid token")
 
-type UserService struct {
-	userRepo  *repository.UserRepository
+type Service struct {
+	userRepo  *store.UserRepository
 	jwtSecret []byte
 	ttl       time.Duration
 }
 
-func NewUserService(userRepo *repository.UserRepository, jwtSecret []byte, ttl time.Duration) *UserService {
-	return &UserService{
+func NewService(userRepo *store.UserRepository, jwtSecret []byte, ttl time.Duration) *Service {
+	return &Service{
 		userRepo:  userRepo,
 		jwtSecret: jwtSecret,
 		ttl:       ttl,
 	}
 }
 
-func (s *UserService) Register(ctx context.Context, email, displayName, password, organization string) (string, *model.User, error) {
+func (s *Service) Register(ctx context.Context, email, displayName, password, organization string) (string, *store.User, error) {
 	hashPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return "", nil, err
@@ -58,7 +57,7 @@ func (s *UserService) Register(ctx context.Context, email, displayName, password
 		string(hashPassword),
 	)
 	if err != nil {
-		if errors.Is(err, repository.ErrEmailTaken) {
+		if errors.Is(err, store.ErrEmailTaken) {
 			return "", nil, ErrEmailTaken
 		}
 		return "", nil, err
@@ -72,10 +71,10 @@ func (s *UserService) Register(ctx context.Context, email, displayName, password
 	return token, user, nil
 }
 
-func (s *UserService) Login(ctx context.Context, email, password string) (string, *model.User, error) {
+func (s *Service) Login(ctx context.Context, email, password string) (string, *store.User, error) {
 	user, err := s.userRepo.GetUserByEmail(ctx, s.normalizeEmail(email))
 	if err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
+		if errors.Is(err, store.ErrNotFound) {
 			return "", nil, ErrInvalidCredentials
 		}
 		return "", nil, err
@@ -96,11 +95,11 @@ func (s *UserService) Login(ctx context.Context, email, password string) (string
 	return token, user, nil
 }
 
-func (s *UserService) normalizeEmail(email string) string {
+func (s *Service) normalizeEmail(email string) string {
 	return strings.ToLower(strings.TrimSpace(email))
 }
 
-func (s *UserService) generateJWT(user *model.User) (string, error) {
+func (s *Service) generateJWT(user *store.User) (string, error) {
 	now := time.Now()
 	claims := jwt.RegisteredClaims{
 		Subject:   user.ID,
@@ -117,7 +116,7 @@ func (s *UserService) generateJWT(user *model.User) (string, error) {
 	return signed, nil
 }
 
-func (s *UserService) ParseJWT(ctx context.Context, tokenString string) (*model.User, error) {
+func (s *Service) ParseJWT(ctx context.Context, tokenString string) (*store.User, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &jwt.RegisteredClaims{}, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
