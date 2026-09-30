@@ -77,3 +77,23 @@ func (r *UserRepository) GetUserByEmail(ctx context.Context, email string) (*mod
 
 	return &u, nil
 }
+
+func (r *UserRepository) GetUserByID(ctx context.Context, id string) (*model.User, error) {
+	var u model.User
+
+	err := r.db.QueryRow(ctx,
+		`SELECT id, email, password_hash, organization, subscription, display_name, created_at
+	 From users
+	 WHERE id = $1`,
+		id,
+	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Organization, &u.Subscription, &u.DisplayName, &u.CreatedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("get user by id: %w", err)
+	}
+
+	return &u, nil
+
+}

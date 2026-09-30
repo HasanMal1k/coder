@@ -5,7 +5,7 @@ import "time"
 type User struct {
 	ID           string    `json:"id"`
 	Email        string    `json:"email"`
-	PasswordHash string    `json:"password_hash"`
+	PasswordHash string    `json:"-"` // Do not include in JSON output
 	Organization string    `json:"organization"`
 	Subscription string    `json:"subscription"`
 	DisplayName  string    `json:"display_name"`
