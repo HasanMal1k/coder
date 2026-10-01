@@ -26,7 +26,7 @@ var (
 	// ErrEmailTaken is returned when the email UNIQUE constraint rejects an insert.
 	ErrEmailTaken = errors.New("email already registered")
 	// ErrNotFound is returned when a lookup matches no row.
-	ErrNotFound = errors.New("user not found")
+	ErrNotFound = errors.New("not found")
 )
 
 type UserRepository struct {
