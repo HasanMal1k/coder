@@ -97,6 +97,13 @@ func (p *Provisioner) Create(ctx context.Context, spec sandbox.Spec) (sandbox.Ha
 			// Run an init process as PID 1 so orphaned processes left behind
 			// by user shells are reaped.
 			Init: &init,
+			// Lets the guest daemon reach a control plane running on the
+			// host, as it does in development.
+			ExtraHosts: []string{"host.docker.internal:host-gateway"},
+			// A machine that was running comes back if its main process dies
+			// or the Docker daemon restarts, so it matches what Postgres says.
+			// Docker never restarts a machine we stopped ourselves.
+			RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyUnlessStopped},
 		},
 	})
 	if err != nil {

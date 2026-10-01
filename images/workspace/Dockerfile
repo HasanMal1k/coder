@@ -1,4 +1,20 @@
 # The machine image every user instance boots from.
+#
+# Build from the repository root, so the guest daemon's source is in the
+# build context:
+#
+#   docker build -f images/workspace/Dockerfile -t coder-workspace:dev .
+
+FROM golang:1.26-alpine AS guestd
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY cmd/guestd ./cmd/guestd
+COPY internal/guest ./internal/guest
+COPY internal/guestapi ./internal/guestapi
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/guestd ./cmd/guestd
 
 FROM ubuntu:24.04
 
@@ -31,9 +47,11 @@ RUN userdel -r ubuntu \
     && echo "coder ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/coder \
     && chmod 0440 /etc/sudoers.d/coder
 
+COPY --from=guestd /out/guestd /usr/local/bin/guestd
+
 USER coder
 WORKDIR /home/coder
 
-# Keeps the machine alive; terminals are opened as separate processes. This is
-# replaced by the guest daemon once it exists.
-CMD ["sleep", "infinity"]
+# The guest daemon is the machine's main process: it connects to the control
+# plane and runs the user's terminals.
+CMD ["guestd"]

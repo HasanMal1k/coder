@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+package coder.guest.v1;
+
+option go_package = "github.com/HasanMal1k/coder/internal/guestapi;guestapi";
+
+// Guest is served by guestd inside every machine. The control plane is the
+// client: it calls these RPCs over the tunnel guestd opened to it.
+service Guest {
+  // Terminal runs a shell on a PTY. The first input message must be start.
+  // The stream ends after the guest sends exit_code, or when the client
+  // closes it, which kills the shell.
+  rpc Terminal(stream TerminalInput) returns (stream TerminalOutput);
+
+  // Ping checks that the guest is alive.
+  rpc Ping(PingRequest) returns (PingResponse);
+}
+
+message TerminalSize {
+  uint32 cols = 1;
+  uint32 rows = 2;
+}
+
+message TerminalStart {
+  TerminalSize size = 1;
+}
+
+message TerminalInput {
+  oneof msg {
+    TerminalStart start = 1;
+    // data is bytes typed by the user, written to the shell's stdin.
+    bytes data = 2;
+    TerminalSize resize = 3;
+  }
+}
+
+message TerminalOutput {
+  oneof msg {
+    // data is the shell's combined stdout and stderr.
+    bytes data = 1;
+    // exit_code is sent once, as the last message, when the shell exits.
+    int32 exit_code = 2;
+  }
+}
+
+message PingRequest {}
+
+message PingResponse {}
