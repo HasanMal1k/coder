@@ -1,4 +1,4 @@
-.PHONY: db image run test proto
+.PHONY: db image run web test proto
 
 # Start Postgres and apply migrations.
 db:
@@ -11,6 +11,10 @@ image:
 
 run:
 	go run ./cmd/server
+
+# The frontend dev server, on http://localhost:3000.
+web:
+	cd web && npm install && npm run dev
 
 test:
 	go test -race ./...

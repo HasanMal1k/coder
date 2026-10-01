@@ -132,7 +132,9 @@ func (s *Service) Create(ctx context.Context, ownerID, name string) (*store.Inst
 	handle, err := s.provisioner.Create(ctx, sandbox.Spec{
 		InstanceID: inst.ID,
 		OwnerID:    inst.OwnerID,
-		Image:      s.cfg.Image,
+		// Instance names are valid hostnames by construction (see validName).
+		Hostname: inst.Name,
+		Image:    s.cfg.Image,
 		Resources: sandbox.Resources{
 			CPUs:     inst.CPUs,
 			MemoryMB: inst.MemoryMB,

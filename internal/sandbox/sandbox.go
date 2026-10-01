@@ -39,9 +39,12 @@ type Spec struct {
 	// label what they create, so resources can be traced back to it.
 	InstanceID string
 	OwnerID    string
-	Image      string
-	Resources  Resources
-	Env        map[string]string
+	// Hostname is the machine's name as seen from inside it, e.g. in the
+	// shell prompt.
+	Hostname  string
+	Image     string
+	Resources Resources
+	Env       map[string]string
 }
 
 // Handle holds the provider's own IDs for a machine and its persistent

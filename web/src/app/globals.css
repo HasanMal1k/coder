@@ -1,0 +1,39 @@
+@import "tailwindcss";
+
+@theme inline {
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+
+  --color-bg: #0b0d10;
+  --color-surface: #12151a;
+  --color-raised: #1a1e25;
+  --color-line: #262b34;
+  --color-line-strong: #363d49;
+  --color-fg: #e7e9ec;
+  --color-muted: #8f97a3;
+  --color-accent: #3ecf8e;
+  --color-accent-strong: #5fdfa5;
+  --color-on-accent: #04130c;
+  --color-warn: #e5b454;
+  --color-danger: #f0736a;
+  /* The terminal's own background, a touch darker than the page. */
+  --color-term: #07090b;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-fg);
+}
+
+::selection {
+  background: color-mix(in srgb, var(--color-accent) 35%, transparent);
+}
+
+/* xterm paints its own background; keep its scrollbar in the page's style. */
+.xterm .xterm-viewport {
+  scrollbar-color: var(--color-line-strong) transparent;
+}

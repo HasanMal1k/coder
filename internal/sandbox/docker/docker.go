@@ -78,7 +78,7 @@ func (p *Provisioner) Create(ctx context.Context, spec sandbox.Spec) (sandbox.Ha
 		Name: name,
 		Config: &container.Config{
 			Image:    spec.Image,
-			Hostname: name,
+			Hostname: spec.Hostname,
 			Env:      env,
 			Labels:   labels,
 		},

@@ -6,8 +6,9 @@ browser. Planned on top of that: a VS Code-style IDE (file tree, editor), a
 live preview of whatever the user is running, a chat panel driving an AI
 harness of their choice with their own API key, and an MCP endpoint.
 
-**Built so far:** auth, instance lifecycle, the guest daemon, the tunnel, and
-the browser terminal, running machines as local Docker containers.
+**Built so far:** auth, instance lifecycle, the guest daemon, the tunnel, the
+browser terminal, and a web frontend (sign in, dashboard, terminal), running
+machines as local Docker containers.
 **Not built yet:** everything under [Planned](#planned).
 
 ## Overview
@@ -61,6 +62,7 @@ Two ideas carry the design:
 | `internal/middleware` | HTTP auth middleware. |
 | `internal/store` | Postgres repositories. No business logic. |
 | `images/workspace` | Dockerfile for the machine image (Ubuntu, dev tools, `guestd`). |
+| `web` | Frontend: Next.js, talking to the API from the browser. |
 
 Dependency rule: transports (`httpapi`, `wsgateway`) → domain (`auth`,
 `instance`) → infrastructure (`sandbox`, `tunnel`, `store`). Domain packages
@@ -148,8 +150,7 @@ machines are never orphaned by a cascade.
 
 Roughly in order.
 
-1. **Frontend**: dashboard and terminal against [API.md](API.md).
-2. **Fly.io provider** (`sandbox/fly`): machines as Fly Machines (Firecracker
+1. **Fly.io provider** (`sandbox/fly`): machines as Fly Machines (Firecracker
    microVMs), one Fly app per user on its own private network. Notes:
    - Only volumes persist on Fly; the root filesystem resets on every start.
      Bake common toolchains into the image and steer per-user installs into
@@ -158,23 +159,23 @@ Roughly in order.
    - Stopped machines cost only storage, so **idle auto-stop** matters:
      `guestd` reports activity, the control plane stops idle machines.
    - `GUEST_CONNECT_URL` becomes the control plane's public `wss://` address.
-3. **Reconciler**: periodically compare Postgres with the provider and fix
+2. **Reconciler**: periodically compare Postgres with the provider and fix
    drift (machines deleted outside the platform, machines with no row).
-4. **Files API** in `guestd` (list, read, write, rename, delete, watch) and the
+3. **Files API** in `guestd` (list, read, write, rename, delete, watch) and the
    IDE (Monaco + file tree).
-5. **Preview**: `https://<port>-<instance>.<preview-domain>` proxied through
+4. **Preview**: `https://<port>-<instance>.<preview-domain>` proxied through
    the tunnel to `localhost:<port>` in the machine. The preview domain must be
    a separate registrable domain, so user-controlled pages can't touch the
    platform's origin.
-6. **Chat**: a panel that runs the user's chosen AI harness *inside their
+5. **Chat**: a panel that runs the user's chosen AI harness *inside their
    machine*, with their own API key (stored encrypted, never returned to the
    browser).
-7. **MCP server** (`internal/mcpapi`): the same instance and guest operations,
+6. **MCP server** (`internal/mcpapi`): the same instance and guest operations,
    exposed as tools, authenticated with per-user API tokens.
-8. **Auth hardening**: refresh tokens in Redis with revocation, token type and
+7. **Auth hardening**: refresh tokens in Redis with revocation, token type and
    `jti` claims, input validation, login timing.
-9. **Quotas and plans**: per-user instance limits, selectable machine sizes.
-10. **More than one server process**: guest connections are held in memory, so
+8. **Quotas and plans**: per-user instance limits, selectable machine sizes.
+9. **More than one server process**: guest connections are held in memory, so
     this needs shared presence (Redis) and routing to the process that holds a
     given tunnel; startup recovery must then stop assuming it is alone.
 
