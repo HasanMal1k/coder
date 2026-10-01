@@ -65,7 +65,7 @@ export function InstanceCard({
             <>
               {status === "running" && (
                 <Link href={`/instances/${instance.id}`} className={buttonClass("primary")}>
-                  Open terminal
+                  Open
                 </Link>
               )}
               {(status === "stopped" || status === "error") && (

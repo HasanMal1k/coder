@@ -124,6 +124,22 @@ export function deleteInstance(token: string, id: string) {
   return request<void>("DELETE", `/instances/${id}`, { token });
 }
 
+/** The port the editor listens on inside every machine. */
+export const IDE_PORT = 13337;
+
+/**
+ * Returns a link that opens one of the machine's ports in the browser,
+ * landing on `path`. The link works once and expires within a minute, so ask
+ * for a new one each time rather than keeping it.
+ */
+export async function portUrl(token: string, id: string, port: number, path = "/") {
+  const result = await request<{ url: string }>("POST", `/instances/${id}/ports/${port}/url`, {
+    token,
+    body: { path },
+  });
+  return result.url;
+}
+
 /** The WebSocket URL for a terminal on the given instance. */
 export function terminalUrl(id: string) {
   return `${API_URL.replace(/^http/, "ws")}/instances/${id}/terminal`;

@@ -2,7 +2,8 @@
 
 Everything a frontend needs to build the dashboard and the terminal.
 
-Base URL in development: `http://localhost:8080`.
+Base URL in development: `http://localhost:8080`. The frontend runs at
+`http://coder.localhost:3000`.
 
 - Request and response bodies are JSON.
 - Errors always look like `{"error": "message"}`.
@@ -11,8 +12,8 @@ Base URL in development: `http://localhost:8080`.
 - Tokens last 15 minutes. There is no refresh yet: on a `401`, send the user
   back to login.
 
-To call the API from a page on another origin (e.g. a dev server on
-`http://localhost:5173`), add that origin to `CORS_ALLOWED_ORIGINS` in `.env`.
+To call the API from a page on another origin, add that origin to
+`CORS_ALLOWED_ORIGINS` in `.env`.
 
 ## Auth
 
@@ -172,6 +173,55 @@ ws.onclose = (event) => {
 term.onData((data) => ws.send(encoder.encode(data)));
 term.onResize(({ cols, rows }) => ws.send(JSON.stringify({ type: "resize", cols, rows })));
 window.addEventListener("resize", () => fit.fit());
+```
+
+## Ports and the editor
+
+Programs running inside a machine are reachable from the browser, each port
+at its own address:
+
+```
+http://<port>-<instance id>.coder.localhost:8080/
+```
+
+Every machine runs the editor (VS Code, via code-server) on port **13337**.
+Anything else the user starts, such as a dev server on port 3000, is
+reachable the same way.
+
+These addresses are a different origin from the app, so the app's access
+token doesn't apply there. To open one, ask the API for a link:
+
+### `POST /instances/{id}/ports/{port}/url` 🔒
+
+```json
+{ "path": "/?folder=/home/coder" }
+```
+
+The body is optional; `path` is where on that port to land (default `/`).
+
+`200`:
+
+```json
+{ "url": "http://13337-5357ebb3-….coder.localhost:8080/__coder/auth?ticket=…&next=…" }
+```
+
+`400` for a port outside 1–65535, `404` if the instance isn't yours.
+
+Load the URL in a frame or a new tab. It signs the browser in to that one
+port of that one machine and redirects to `path`.
+
+- The link works **once** and expires after **a minute**. Request a new one
+  every time you open a port; don't store it.
+- The sign-in then lasts 12 hours for that port.
+- If the machine isn't ready, or nothing is listening on the port yet, the
+  page says so and retries by itself, so you can load the editor straight
+  after starting a machine.
+- A machine created before this feature existed shows a "needs recreating"
+  page.
+
+```js
+const { url } = await api("POST", `/instances/${id}/ports/13337/url`, { path: "/?folder=/home/coder" });
+iframe.src = url;
 ```
 
 ## Other

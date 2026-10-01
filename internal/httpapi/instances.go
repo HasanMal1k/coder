@@ -3,19 +3,23 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/HasanMal1k/coder/internal/instance"
 	"github.com/HasanMal1k/coder/internal/middleware"
+	"github.com/HasanMal1k/coder/internal/portproxy"
 	"github.com/HasanMal1k/coder/internal/store"
 )
 
 type InstanceHandler struct {
-	svc *instance.Service
+	svc   *instance.Service
+	proxy *portproxy.Proxy
 }
 
 type CreateInstanceRequest struct {
@@ -37,9 +41,19 @@ type InstanceListResponse struct {
 	Instances []InstanceResponse `json:"instances"`
 }
 
-func NewInstanceHandler(svc *instance.Service) *InstanceHandler {
+type PortURLRequest struct {
+	// Path is where on the port the browser should land. Optional.
+	Path string `json:"path"`
+}
+
+type PortURLResponse struct {
+	URL string `json:"url"`
+}
+
+func NewInstanceHandler(svc *instance.Service, proxy *portproxy.Proxy) *InstanceHandler {
 	return &InstanceHandler{
-		svc: svc,
+		svc:   svc,
+		proxy: proxy,
 	}
 }
 
@@ -149,6 +163,45 @@ func (h *InstanceHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// PortURL returns a single-use link that opens one of the instance's ports
+// (the editor, or a program the user is running) in the browser.
+func (h *InstanceHandler) PortURL(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.UserFromContext(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "not authenticated"})
+		return
+	}
+
+	port, err := strconv.Atoi(chi.URLParam(r, "port"))
+	if err != nil || port < 1 || port > 65535 {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "port must be between 1 and 65535"})
+		return
+	}
+
+	// The body is optional; an empty one means "the root of that port".
+	var req PortURLRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid request body"})
+		return
+	}
+
+	// This is the ownership check: the link is only issued for an instance
+	// this user can see.
+	inst, err := h.svc.Get(r.Context(), user.ID, chi.URLParam(r, "id"))
+	if err != nil {
+		writeInstanceError(w, r, err)
+		return
+	}
+
+	link, err := h.proxy.URL(user.ID, inst.ID, port, req.Path)
+	if err != nil {
+		writeInstanceError(w, r, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, PortURLResponse{URL: link})
 }
 
 func toInstanceResponse(inst *store.Instance) InstanceResponse {

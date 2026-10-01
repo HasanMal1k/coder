@@ -28,6 +28,12 @@ const THEME = {
   selectionBackground: "#3ecf8e55",
 };
 
+/** When, after the window loses focus, to check whether the editor's frame took it. */
+const RECLAIM_CHECKS_MS = [0, 10, 30, 80, 200];
+
+/** How many keystrokes to hold while the shell is still connecting. */
+const MAX_TYPED_AHEAD = 1024;
+
 type Phase =
   | { kind: "connecting" }
   | { kind: "open" }
@@ -65,22 +71,28 @@ function describeClose(event: CloseEvent, exitCode: number | null): Phase {
 export default function TerminalView({
   instanceId,
   token,
+  active,
   onEnded,
 }: {
   instanceId: string;
   token: string;
+  /** Whether the terminal is the visible tab. It keeps running when it isn't. */
+  active: boolean;
   onEnded: () => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const termRef = useRef<Terminal | null>(null);
   const [phase, setPhase] = useState<Phase>({ kind: "connecting" });
   // Bumping this tears the terminal down and opens a fresh one.
   const [attempt, setAttempt] = useState(0);
 
-  // Kept in a ref so a new callback identity doesn't restart the terminal.
+  // Kept in refs so a new value doesn't restart the terminal.
   const onEndedRef = useRef(onEnded);
+  const activeRef = useRef(active);
   useEffect(() => {
     onEndedRef.current = onEnded;
-  }, [onEnded]);
+    activeRef.current = active;
+  }, [onEnded, active]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -97,11 +109,16 @@ export default function TerminalView({
     term.loadAddon(fit);
     term.open(container);
     fit.fit();
+    termRef.current = term;
+    if (activeRef.current) term.focus();
 
     const socket = new WebSocket(terminalUrl(instanceId));
     socket.binaryType = "arraybuffer";
     const encoder = new TextEncoder();
     let exitCode: number | null = null;
+    // Keystrokes typed before the shell is ready are held here and delivered
+    // once it is, rather than lost. null once the shell is ready.
+    let typedAhead: string[] | null = [];
     // Set once this effect is cleaned up, so late events from this socket
     // can't touch state that now belongs to its replacement.
     let disposed = false;
@@ -123,7 +140,8 @@ export default function TerminalView({
       const message = JSON.parse(event.data) as { type: string; code?: number };
       if (message.type === "ready") {
         setPhase({ kind: "open" });
-        term.focus();
+        for (const data of typedAhead ?? []) socket.send(encoder.encode(data));
+        typedAhead = null;
       } else if (message.type === "exit") {
         exitCode = message.code ?? null;
       }
@@ -140,7 +158,13 @@ export default function TerminalView({
     };
 
     const onData = term.onData((data) => {
-      if (socket.readyState === WebSocket.OPEN) socket.send(encoder.encode(data));
+      if (typedAhead) {
+        // Bounded, so holding a key down while disconnected can't grow it
+        // without limit.
+        if (typedAhead.length < MAX_TYPED_AHEAD) typedAhead.push(data);
+      } else if (socket.readyState === WebSocket.OPEN) {
+        socket.send(encoder.encode(data));
+      }
     });
     const onResize = term.onResize(({ cols, rows }) => {
       if (socket.readyState === WebSocket.OPEN) {
@@ -150,10 +174,14 @@ export default function TerminalView({
 
     // Refit when the container changes size; xterm then reports the new
     // dimensions through onResize.
+    // While its tab is hidden the container has no size; fitting then would
+    // shrink the shell to nothing, so wait until it is shown again.
     let frame = 0;
     const observer = new ResizeObserver(() => {
       cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => fit.fit());
+      frame = requestAnimationFrame(() => {
+        if (container.clientWidth > 0 && container.clientHeight > 0) fit.fit();
+      });
     });
     observer.observe(container);
 
@@ -165,8 +193,46 @@ export default function TerminalView({
       onResize.dispose();
       socket.close();
       term.dispose();
+      termRef.current = null;
     };
   }, [instanceId, token, attempt]);
+
+  // While this is the visible tab, typing belongs to the terminal.
+  useEffect(() => {
+    if (!active) return;
+
+    termRef.current?.focus();
+
+    // The editor lives in a frame on the other tab, and takes keyboard focus
+    // when it finishes loading, even though it is hidden. The window losing
+    // focus to a frame is how that shows up here; take it back, or the user's
+    // keystrokes would go to an editor they can't see.
+    //
+    // This can't be done inside the blur event itself. The browser is still
+    // handing focus to the frame at that point; focusing the terminal then is
+    // overridden when the hand-over completes, leaving the page believing
+    // the terminal is focused while keys go to the editor. Nor is one check
+    // on the next tick enough: focus passes through "nothing focused" on its
+    // way to the frame, and a check that lands there sees no frame yet. So
+    // look a few times in quick succession.
+    let timers: ReturnType<typeof setTimeout>[] = [];
+    const take = () => {
+      if (document.activeElement instanceof HTMLIFrameElement) {
+        window.focus();
+        termRef.current?.focus();
+      }
+    };
+    const reclaim = () => {
+      timers.forEach(clearTimeout);
+      timers = RECLAIM_CHECKS_MS.map((delay) => setTimeout(take, delay));
+    };
+    window.addEventListener("blur", reclaim);
+
+    return () => {
+      window.removeEventListener("blur", reclaim);
+      timers.forEach(clearTimeout);
+    };
+  }, [active]);
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col bg-term p-2">

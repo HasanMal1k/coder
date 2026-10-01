@@ -20,6 +20,7 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	Guest_Terminal_FullMethodName = "/coder.guest.v1.Guest/Terminal"
+	Guest_Forward_FullMethodName  = "/coder.guest.v1.Guest/Forward"
 	Guest_Ping_FullMethodName     = "/coder.guest.v1.Guest/Ping"
 )
 
@@ -34,6 +35,12 @@ type GuestClient interface {
 	// The stream ends after the guest sends exit_code, or when the client
 	// closes it, which kills the shell.
 	Terminal(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[TerminalInput, TerminalOutput], error)
+	// Forward connects to a TCP port on the machine's loopback interface and
+	// relays bytes both ways. The first request message must be open; the
+	// guest answers with opened once connected, or fails the call if nothing
+	// is listening. The client half-closing closes the write side of the TCP
+	// connection; the stream ends when the machine's side closes.
+	Forward(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ForwardRequest, ForwardResponse], error)
 	// Ping checks that the guest is alive.
 	Ping(ctx context.Context, in *PingRequest, opts ...grpc.CallOption) (*PingResponse, error)
 }
@@ -59,6 +66,19 @@ func (c *guestClient) Terminal(ctx context.Context, opts ...grpc.CallOption) (gr
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type Guest_TerminalClient = grpc.BidiStreamingClient[TerminalInput, TerminalOutput]
 
+func (c *guestClient) Forward(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ForwardRequest, ForwardResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &Guest_ServiceDesc.Streams[1], Guest_Forward_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ForwardRequest, ForwardResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Guest_ForwardClient = grpc.BidiStreamingClient[ForwardRequest, ForwardResponse]
+
 func (c *guestClient) Ping(ctx context.Context, in *PingRequest, opts ...grpc.CallOption) (*PingResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(PingResponse)
@@ -80,6 +100,12 @@ type GuestServer interface {
 	// The stream ends after the guest sends exit_code, or when the client
 	// closes it, which kills the shell.
 	Terminal(grpc.BidiStreamingServer[TerminalInput, TerminalOutput]) error
+	// Forward connects to a TCP port on the machine's loopback interface and
+	// relays bytes both ways. The first request message must be open; the
+	// guest answers with opened once connected, or fails the call if nothing
+	// is listening. The client half-closing closes the write side of the TCP
+	// connection; the stream ends when the machine's side closes.
+	Forward(grpc.BidiStreamingServer[ForwardRequest, ForwardResponse]) error
 	// Ping checks that the guest is alive.
 	Ping(context.Context, *PingRequest) (*PingResponse, error)
 	mustEmbedUnimplementedGuestServer()
@@ -94,6 +120,9 @@ type UnimplementedGuestServer struct{}
 
 func (UnimplementedGuestServer) Terminal(grpc.BidiStreamingServer[TerminalInput, TerminalOutput]) error {
 	return status.Error(codes.Unimplemented, "method Terminal not implemented")
+}
+func (UnimplementedGuestServer) Forward(grpc.BidiStreamingServer[ForwardRequest, ForwardResponse]) error {
+	return status.Error(codes.Unimplemented, "method Forward not implemented")
 }
 func (UnimplementedGuestServer) Ping(context.Context, *PingRequest) (*PingResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Ping not implemented")
@@ -125,6 +154,13 @@ func _Guest_Terminal_Handler(srv interface{}, stream grpc.ServerStream) error {
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type Guest_TerminalServer = grpc.BidiStreamingServer[TerminalInput, TerminalOutput]
+
+func _Guest_Forward_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(GuestServer).Forward(&grpc.GenericServerStream[ForwardRequest, ForwardResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Guest_ForwardServer = grpc.BidiStreamingServer[ForwardRequest, ForwardResponse]
 
 func _Guest_Ping_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(PingRequest)
@@ -160,6 +196,12 @@ var Guest_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "Terminal",
 			Handler:       _Guest_Terminal_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "Forward",
+			Handler:       _Guest_Forward_Handler,
 			ServerStreams: true,
 			ClientStreams: true,
 		},

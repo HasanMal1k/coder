@@ -38,6 +38,19 @@ func connect(t *testing.T, hub *tunnel.Hub, instanceID string) {
 	})
 }
 
+// waitOnline blocks until the hub has registered instanceID's guest.
+func waitOnline(t *testing.T, hub *tunnel.Hub, instanceID string) {
+	t.Helper()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for !hub.Online(instanceID) {
+		if time.Now().After(deadline) {
+			t.Fatal("guest never came online")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // readUntilExit collects a terminal's output until the shell exits.
 func readUntilExit(t *testing.T, term *tunnel.Terminal) (string, int) {
 	t.Helper()
@@ -197,13 +210,7 @@ func TestGuestGoesOfflineWhenConnectionDrops(t *testing.T) {
 		close(served)
 	}()
 
-	deadline := time.Now().Add(10 * time.Second)
-	for !hub.Online("inst-1") {
-		if time.Now().After(deadline) {
-			t.Fatal("guest never came online")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitOnline(t, hub, "inst-1")
 
 	// Stopping the guest drops its end of the connection.
 	cancel()

@@ -11,6 +11,10 @@ import (
 // "Authorization: Bearer <guest token>", to say which instance it is.
 const HeaderInstanceID = "Coder-Instance-Id"
 
+// IDEPort is the loopback port the editor (code-server) listens on in every
+// machine.
+const IDEPort = 13337
+
 // Environment variables the control plane sets on a machine for guestd.
 const (
 	EnvInstanceID = "CODER_INSTANCE_ID"

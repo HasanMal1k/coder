@@ -66,7 +66,7 @@ func (s *Server) Terminal(stream grpc.BidiStreamingServer[guestapi.TerminalInput
 	}
 
 	cmd := exec.Command(s.shell[0], s.shell[1:]...)
-	cmd.Env = shellEnv()
+	cmd.Env = childEnv()
 	if home, err := os.UserHomeDir(); err == nil {
 		cmd.Dir = home
 	}
@@ -171,9 +171,9 @@ func (s *Server) Terminal(stream grpc.BidiStreamingServer[guestapi.TerminalInput
 	}
 }
 
-// shellEnv is the environment given to shells: guestd's own, minus its
-// credential, with a terminal type programs understand.
-func shellEnv() []string {
+// childEnv is the environment given to the programs guestd starts: its own,
+// minus its credential, with a terminal type programs understand.
+func childEnv() []string {
 	env := make([]string, 0, len(os.Environ())+1)
 	for _, kv := range os.Environ() {
 		if strings.HasPrefix(kv, guestapi.EnvGuestToken+"=") || strings.HasPrefix(kv, "TERM=") {

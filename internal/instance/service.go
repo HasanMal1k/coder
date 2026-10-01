@@ -38,8 +38,8 @@ const (
 // Resources every instance gets for now. They become per-plan once there are
 // plans.
 const (
-	defaultCPUs     = 1
-	defaultMemoryMB = 1024
+	defaultCPUs     = 2
+	defaultMemoryMB = 2048
 	defaultDiskGB   = 10
 )
 
@@ -69,6 +69,12 @@ var (
 	// ErrGuestUnauthorized is returned when a machine presents the wrong
 	// credentials for the instance it claims to be.
 	ErrGuestUnauthorized = errors.New("invalid guest credentials")
+	// ErrPortClosed is returned when nothing on the machine is listening on
+	// the requested port.
+	ErrPortClosed = errors.New("nothing is listening on that port")
+	// ErrPortUnsupported is returned when the machine was created from an
+	// image whose guest daemon predates port forwarding.
+	ErrPortUnsupported = errors.New("instance does not support port forwarding")
 )
 
 var validName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$`)
@@ -284,6 +290,26 @@ func (s *Service) OpenTerminal(ctx context.Context, ownerID, id string, size tun
 	}
 
 	return term, nil
+}
+
+// DialPort connects to a port on instance id's loopback interface. It does no
+// ownership check: the caller must already have established that whoever is
+// asking may use this instance.
+func (s *Service) DialPort(ctx context.Context, id string, port int) (net.Conn, error) {
+	conn, err := s.hub.DialPort(ctx, id, port)
+	if err != nil {
+		switch {
+		case errors.Is(err, tunnel.ErrGuestOffline):
+			return nil, ErrGuestOffline
+		case errors.Is(err, tunnel.ErrPortClosed):
+			return nil, ErrPortClosed
+		case errors.Is(err, tunnel.ErrUnsupported):
+			return nil, ErrPortUnsupported
+		}
+		return nil, err
+	}
+
+	return conn, nil
 }
 
 // AuthenticateGuest checks that token is the guest token issued to instance

@@ -7,8 +7,8 @@ live preview of whatever the user is running, a chat panel driving an AI
 harness of their choice with their own API key, and an MCP endpoint.
 
 **Built so far:** auth, instance lifecycle, the guest daemon, the tunnel, the
-browser terminal, and a web frontend (sign in, dashboard, terminal), running
-machines as local Docker containers.
+browser terminal, an embedded editor (VS Code) served through a port proxy,
+and a web frontend, running machines as local Docker containers.
 **Not built yet:** everything under [Planned](#planned).
 
 ## Overview
@@ -59,6 +59,7 @@ Two ideas carry the design:
 | `internal/guestapi` | Protocol between control plane and `guestd` (gRPC, defined in `guest.proto`). |
 | `internal/httpapi` | REST handlers + router. |
 | `internal/wsgateway` | WebSocket handlers: browser terminal, guest tunnel. |
+| `internal/portproxy` | Serves ports inside machines (the editor, dev servers) to the browser, each on its own origin. |
 | `internal/middleware` | HTTP auth middleware. |
 | `internal/store` | Postgres repositories. No business logic. |
 | `images/workspace` | Dockerfile for the machine image (Ubuntu, dev tools, `guestd`). |
@@ -86,6 +87,46 @@ browser ⇄ WebSocket ⇄ wsgateway ⇄ tunnel.Terminal ⇄ gRPC stream ⇄ yamu
   Nothing buffers without bound.
 - If the tunnel drops, `guestd` reconnects with exponential backoff (1s to
   30s). A new connection for an instance replaces the old one.
+
+### Ports and the editor
+
+`guestd` also forwards TCP: the `Forward` call connects to a loopback port on
+the machine and relays bytes. On the control plane that stream is wrapped as
+a `net.Conn`, and an ordinary HTTP reverse proxy uses it as its transport, so
+HTTP and WebSockets to a machine's port work unchanged.
+
+Every machine runs code-server on loopback port 13337, started and kept
+alive by `guestd`, with its own authentication off: the tunnel is the only
+way in.
+
+Each port of each machine has its own hostname,
+`<port>-<instance id>.<WORKSPACE_HOST>`, and therefore its own browser origin.
+Code running on a user's machine can't read the app's storage (where the
+access token lives) or another machine's pages.
+
+Getting a browser in:
+
+1. The app, holding the user's access token, asks the API for a URL. The API
+   checks ownership and returns one containing a **ticket**: signed,
+   single-use, valid for a minute, naming the user, instance and port.
+2. Loading that URL on the machine's origin trades the ticket for a
+   **session** cookie (12 hours, `HttpOnly`, host-only) and redirects.
+3. Later requests carry the cookie. The proxy strips it before forwarding,
+   and rejects requests whose `Origin` is anything but the same machine.
+
+Tickets and sessions are signed with a key *derived* from the server secret,
+not the secret itself, so neither can be passed off as an API access token,
+or the reverse.
+
+**Same site.** The app and the machines should share a registrable domain
+(`coder.localhost` in development; `example.com` with `app.example.com` and
+`*.example.com` in production). Browsers restrict cookies inside a frame
+embedded from a different site; in that setup the editor loads but its
+service worker can't register, which breaks its webviews. Different origins
+on one site keep the isolation above without that problem. The remaining
+exposure of sharing a site is that a page on a machine could set cookies for
+the parent domain; the app authenticates with a header, not cookies, so that
+gives it nothing.
 
 ### Guest credentials
 
@@ -161,28 +202,28 @@ Roughly in order.
    - `GUEST_CONNECT_URL` becomes the control plane's public `wss://` address.
 2. **Reconciler**: periodically compare Postgres with the provider and fix
    drift (machines deleted outside the platform, machines with no row).
-3. **Files API** in `guestd` (list, read, write, rename, delete, watch) and the
-   IDE (Monaco + file tree).
-4. **Preview**: `https://<port>-<instance>.<preview-domain>` proxied through
-   the tunnel to `localhost:<port>` in the machine. The preview domain must be
-   a separate registrable domain, so user-controlled pages can't touch the
-   platform's origin.
-5. **Chat**: a panel that runs the user's chosen AI harness *inside their
+3. **Preview tab**: the port proxy already serves any port; the frontend
+   needs a tab that shows the user's running app next to the editor.
+4. **Chat**: a panel that runs the user's chosen AI harness *inside their
    machine*, with their own API key (stored encrypted, never returned to the
    browser).
-6. **MCP server** (`internal/mcpapi`): the same instance and guest operations,
+5. **MCP server** (`internal/mcpapi`): the same instance and guest operations,
    exposed as tools, authenticated with per-user API tokens.
-7. **Auth hardening**: refresh tokens in Redis with revocation, token type and
+6. **Auth hardening**: refresh tokens in Redis with revocation, token type and
    `jti` claims, input validation, login timing.
-8. **Quotas and plans**: per-user instance limits, selectable machine sizes.
-9. **More than one server process**: guest connections are held in memory, so
+7. **Quotas and plans**: per-user instance limits, selectable machine sizes.
+8. **More than one server process**: guest connections are held in memory, so
     this needs shared presence (Redis) and routing to the process that holds a
     given tunnel; startup recovery must then stop assuming it is alone.
 
 ## Known gaps
 
-- Every instance is the same size (1 CPU, 1 GB RAM, 10 GB disk).
+- Every instance is the same size (2 CPUs, 2 GB RAM, 10 GB disk).
 - If the server dies between creating a machine and saving its ID, that
   machine is orphaned until the reconciler exists. Its labels identify it.
 - No limit on how many instances a user can create.
 - Access tokens expire after 15 minutes with no way to refresh.
+- A port session, once issued, lasts its 12 hours even if the user signs out
+  or the instance changes hands; it is not checked against the database.
+- Used tickets are remembered in memory, which is only correct with a single
+  server process.

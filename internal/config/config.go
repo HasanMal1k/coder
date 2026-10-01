@@ -18,6 +18,13 @@ type Config struct {
 	// GuestConnectURL is where machines dial the control plane. It must be
 	// reachable from inside a machine, which "localhost" is not.
 	GuestConnectURL string
+	// WorkspaceHost is the host that machine origins are subdomains of: a
+	// machine's port is served at <port>-<instance id>.<WorkspaceHost>. It
+	// should share a registrable domain with the frontend (app.example.com
+	// and example.com, say), so that the two are one site to the browser.
+	// WorkspaceScheme is how browsers reach it, "http" or "https".
+	WorkspaceHost   string
+	WorkspaceScheme string
 	// AllowedOrigins are the browser origins (e.g. "http://localhost:5173")
 	// allowed to call the API and open terminals from another origin.
 	AllowedOrigins []string
@@ -37,6 +44,8 @@ func Load() (Config, error) {
 		Port:            os.Getenv("PORT"),
 		WorkspaceImage:  os.Getenv("WORKSPACE_IMAGE"),
 		GuestConnectURL: os.Getenv("GUEST_CONNECT_URL"),
+		WorkspaceHost:   os.Getenv("WORKSPACE_HOST"),
+		WorkspaceScheme: os.Getenv("WORKSPACE_SCHEME"),
 		AllowedOrigins:  splitList(os.Getenv("CORS_ALLOWED_ORIGINS")),
 	}
 
@@ -56,6 +65,21 @@ func Load() (Config, error) {
 		// Local Docker machines reach a control plane running on the host
 		// through this name.
 		cfg.GuestConnectURL = "ws://host.docker.internal:" + cfg.Port + "/guest/connect"
+	}
+
+	if cfg.WorkspaceHost == "" {
+		// Browsers resolve every *.localhost name to this computer, so this
+		// works in development with no DNS setup. It is "coder.localhost"
+		// rather than plain "localhost" so that machines and the app (served
+		// at coder.localhost:3000) belong to the same site: browsers restrict
+		// cookies in a frame that is embedded from a different site.
+		cfg.WorkspaceHost = "coder.localhost:" + cfg.Port
+	}
+	if cfg.WorkspaceScheme == "" {
+		cfg.WorkspaceScheme = "http"
+	}
+	if cfg.WorkspaceScheme != "http" && cfg.WorkspaceScheme != "https" {
+		return Config{}, errors.New("WORKSPACE_SCHEME must be http or https")
 	}
 
 	return cfg, nil

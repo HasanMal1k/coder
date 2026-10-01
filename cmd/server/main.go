@@ -14,6 +14,7 @@ import (
 	"github.com/HasanMal1k/coder/internal/config"
 	"github.com/HasanMal1k/coder/internal/httpapi"
 	"github.com/HasanMal1k/coder/internal/instance"
+	"github.com/HasanMal1k/coder/internal/portproxy"
 	"github.com/HasanMal1k/coder/internal/sandbox/docker"
 	"github.com/HasanMal1k/coder/internal/store"
 	"github.com/HasanMal1k/coder/internal/tunnel"
@@ -77,11 +78,18 @@ func run() error {
 	}
 
 	gateway := wsgateway.New(authSvc, instanceSvc, cfg.AllowedOrigins)
-	router := httpapi.NewRouter(authSvc, instanceSvc, gateway, cfg.AllowedOrigins)
+	proxy := portproxy.New(portproxy.Config{
+		Host:   cfg.WorkspaceHost,
+		Scheme: cfg.WorkspaceScheme,
+		Secret: []byte(cfg.JWTSecret),
+	}, instanceSvc)
+	router := httpapi.NewRouter(authSvc, instanceSvc, gateway, proxy, cfg.AllowedOrigins)
 
 	srv := &http.Server{
-		Addr:              ":" + cfg.Port,
-		Handler:           router,
+		Addr: ":" + cfg.Port,
+		// Requests for a machine's own hostname go to the proxy; everything
+		// else is the API.
+		Handler:           proxy.Wrap(router),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 		// Every request's context descends from ctx. Shutdown doesn't close

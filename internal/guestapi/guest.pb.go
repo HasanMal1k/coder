@@ -300,6 +300,250 @@ func (*TerminalOutput_Data) isTerminalOutput_Msg() {}
 
 func (*TerminalOutput_ExitCode) isTerminalOutput_Msg() {}
 
+type ForwardOpen struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Port          uint32                 `protobuf:"varint,1,opt,name=port,proto3" json:"port,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ForwardOpen) Reset() {
+	*x = ForwardOpen{}
+	mi := &file_guest_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ForwardOpen) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ForwardOpen) ProtoMessage() {}
+
+func (x *ForwardOpen) ProtoReflect() protoreflect.Message {
+	mi := &file_guest_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ForwardOpen.ProtoReflect.Descriptor instead.
+func (*ForwardOpen) Descriptor() ([]byte, []int) {
+	return file_guest_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *ForwardOpen) GetPort() uint32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+type ForwardOpened struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ForwardOpened) Reset() {
+	*x = ForwardOpened{}
+	mi := &file_guest_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ForwardOpened) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ForwardOpened) ProtoMessage() {}
+
+func (x *ForwardOpened) ProtoReflect() protoreflect.Message {
+	mi := &file_guest_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ForwardOpened.ProtoReflect.Descriptor instead.
+func (*ForwardOpened) Descriptor() ([]byte, []int) {
+	return file_guest_proto_rawDescGZIP(), []int{5}
+}
+
+type ForwardRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Msg:
+	//
+	//	*ForwardRequest_Open
+	//	*ForwardRequest_Data
+	Msg           isForwardRequest_Msg `protobuf_oneof:"msg"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ForwardRequest) Reset() {
+	*x = ForwardRequest{}
+	mi := &file_guest_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ForwardRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ForwardRequest) ProtoMessage() {}
+
+func (x *ForwardRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_guest_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ForwardRequest.ProtoReflect.Descriptor instead.
+func (*ForwardRequest) Descriptor() ([]byte, []int) {
+	return file_guest_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *ForwardRequest) GetMsg() isForwardRequest_Msg {
+	if x != nil {
+		return x.Msg
+	}
+	return nil
+}
+
+func (x *ForwardRequest) GetOpen() *ForwardOpen {
+	if x != nil {
+		if x, ok := x.Msg.(*ForwardRequest_Open); ok {
+			return x.Open
+		}
+	}
+	return nil
+}
+
+func (x *ForwardRequest) GetData() []byte {
+	if x != nil {
+		if x, ok := x.Msg.(*ForwardRequest_Data); ok {
+			return x.Data
+		}
+	}
+	return nil
+}
+
+type isForwardRequest_Msg interface {
+	isForwardRequest_Msg()
+}
+
+type ForwardRequest_Open struct {
+	Open *ForwardOpen `protobuf:"bytes,1,opt,name=open,proto3,oneof"`
+}
+
+type ForwardRequest_Data struct {
+	Data []byte `protobuf:"bytes,2,opt,name=data,proto3,oneof"`
+}
+
+func (*ForwardRequest_Open) isForwardRequest_Msg() {}
+
+func (*ForwardRequest_Data) isForwardRequest_Msg() {}
+
+type ForwardResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Msg:
+	//
+	//	*ForwardResponse_Opened
+	//	*ForwardResponse_Data
+	Msg           isForwardResponse_Msg `protobuf_oneof:"msg"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ForwardResponse) Reset() {
+	*x = ForwardResponse{}
+	mi := &file_guest_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ForwardResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ForwardResponse) ProtoMessage() {}
+
+func (x *ForwardResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_guest_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ForwardResponse.ProtoReflect.Descriptor instead.
+func (*ForwardResponse) Descriptor() ([]byte, []int) {
+	return file_guest_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *ForwardResponse) GetMsg() isForwardResponse_Msg {
+	if x != nil {
+		return x.Msg
+	}
+	return nil
+}
+
+func (x *ForwardResponse) GetOpened() *ForwardOpened {
+	if x != nil {
+		if x, ok := x.Msg.(*ForwardResponse_Opened); ok {
+			return x.Opened
+		}
+	}
+	return nil
+}
+
+func (x *ForwardResponse) GetData() []byte {
+	if x != nil {
+		if x, ok := x.Msg.(*ForwardResponse_Data); ok {
+			return x.Data
+		}
+	}
+	return nil
+}
+
+type isForwardResponse_Msg interface {
+	isForwardResponse_Msg()
+}
+
+type ForwardResponse_Opened struct {
+	Opened *ForwardOpened `protobuf:"bytes,1,opt,name=opened,proto3,oneof"`
+}
+
+type ForwardResponse_Data struct {
+	Data []byte `protobuf:"bytes,2,opt,name=data,proto3,oneof"`
+}
+
+func (*ForwardResponse_Opened) isForwardResponse_Msg() {}
+
+func (*ForwardResponse_Data) isForwardResponse_Msg() {}
+
 type PingRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -308,7 +552,7 @@ type PingRequest struct {
 
 func (x *PingRequest) Reset() {
 	*x = PingRequest{}
-	mi := &file_guest_proto_msgTypes[4]
+	mi := &file_guest_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -320,7 +564,7 @@ func (x *PingRequest) String() string {
 func (*PingRequest) ProtoMessage() {}
 
 func (x *PingRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_guest_proto_msgTypes[4]
+	mi := &file_guest_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -333,7 +577,7 @@ func (x *PingRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PingRequest.ProtoReflect.Descriptor instead.
 func (*PingRequest) Descriptor() ([]byte, []int) {
-	return file_guest_proto_rawDescGZIP(), []int{4}
+	return file_guest_proto_rawDescGZIP(), []int{8}
 }
 
 type PingResponse struct {
@@ -344,7 +588,7 @@ type PingResponse struct {
 
 func (x *PingResponse) Reset() {
 	*x = PingResponse{}
-	mi := &file_guest_proto_msgTypes[5]
+	mi := &file_guest_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -356,7 +600,7 @@ func (x *PingResponse) String() string {
 func (*PingResponse) ProtoMessage() {}
 
 func (x *PingResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_guest_proto_msgTypes[5]
+	mi := &file_guest_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -369,7 +613,7 @@ func (x *PingResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PingResponse.ProtoReflect.Descriptor instead.
 func (*PingResponse) Descriptor() ([]byte, []int) {
-	return file_guest_proto_rawDescGZIP(), []int{5}
+	return file_guest_proto_rawDescGZIP(), []int{9}
 }
 
 var File_guest_proto protoreflect.FileDescriptor
@@ -390,11 +634,23 @@ const file_guest_proto_rawDesc = "" +
 	"\x0eTerminalOutput\x12\x14\n" +
 	"\x04data\x18\x01 \x01(\fH\x00R\x04data\x12\x1d\n" +
 	"\texit_code\x18\x02 \x01(\x05H\x00R\bexitCodeB\x05\n" +
+	"\x03msg\"!\n" +
+	"\vForwardOpen\x12\x12\n" +
+	"\x04port\x18\x01 \x01(\rR\x04port\"\x0f\n" +
+	"\rForwardOpened\"`\n" +
+	"\x0eForwardRequest\x121\n" +
+	"\x04open\x18\x01 \x01(\v2\x1b.coder.guest.v1.ForwardOpenH\x00R\x04open\x12\x14\n" +
+	"\x04data\x18\x02 \x01(\fH\x00R\x04dataB\x05\n" +
+	"\x03msg\"g\n" +
+	"\x0fForwardResponse\x127\n" +
+	"\x06opened\x18\x01 \x01(\v2\x1d.coder.guest.v1.ForwardOpenedH\x00R\x06opened\x12\x14\n" +
+	"\x04data\x18\x02 \x01(\fH\x00R\x04dataB\x05\n" +
 	"\x03msg\"\r\n" +
 	"\vPingRequest\"\x0e\n" +
-	"\fPingResponse2\x99\x01\n" +
+	"\fPingResponse2\xe9\x01\n" +
 	"\x05Guest\x12M\n" +
-	"\bTerminal\x12\x1d.coder.guest.v1.TerminalInput\x1a\x1e.coder.guest.v1.TerminalOutput(\x010\x01\x12A\n" +
+	"\bTerminal\x12\x1d.coder.guest.v1.TerminalInput\x1a\x1e.coder.guest.v1.TerminalOutput(\x010\x01\x12N\n" +
+	"\aForward\x12\x1e.coder.guest.v1.ForwardRequest\x1a\x1f.coder.guest.v1.ForwardResponse(\x010\x01\x12A\n" +
 	"\x04Ping\x12\x1b.coder.guest.v1.PingRequest\x1a\x1c.coder.guest.v1.PingResponseB8Z6github.com/HasanMal1k/coder/internal/guestapi;guestapib\x06proto3"
 
 var (
@@ -409,28 +665,36 @@ func file_guest_proto_rawDescGZIP() []byte {
 	return file_guest_proto_rawDescData
 }
 
-var file_guest_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_guest_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_guest_proto_goTypes = []any{
-	(*TerminalSize)(nil),   // 0: coder.guest.v1.TerminalSize
-	(*TerminalStart)(nil),  // 1: coder.guest.v1.TerminalStart
-	(*TerminalInput)(nil),  // 2: coder.guest.v1.TerminalInput
-	(*TerminalOutput)(nil), // 3: coder.guest.v1.TerminalOutput
-	(*PingRequest)(nil),    // 4: coder.guest.v1.PingRequest
-	(*PingResponse)(nil),   // 5: coder.guest.v1.PingResponse
+	(*TerminalSize)(nil),    // 0: coder.guest.v1.TerminalSize
+	(*TerminalStart)(nil),   // 1: coder.guest.v1.TerminalStart
+	(*TerminalInput)(nil),   // 2: coder.guest.v1.TerminalInput
+	(*TerminalOutput)(nil),  // 3: coder.guest.v1.TerminalOutput
+	(*ForwardOpen)(nil),     // 4: coder.guest.v1.ForwardOpen
+	(*ForwardOpened)(nil),   // 5: coder.guest.v1.ForwardOpened
+	(*ForwardRequest)(nil),  // 6: coder.guest.v1.ForwardRequest
+	(*ForwardResponse)(nil), // 7: coder.guest.v1.ForwardResponse
+	(*PingRequest)(nil),     // 8: coder.guest.v1.PingRequest
+	(*PingResponse)(nil),    // 9: coder.guest.v1.PingResponse
 }
 var file_guest_proto_depIdxs = []int32{
 	0, // 0: coder.guest.v1.TerminalStart.size:type_name -> coder.guest.v1.TerminalSize
 	1, // 1: coder.guest.v1.TerminalInput.start:type_name -> coder.guest.v1.TerminalStart
 	0, // 2: coder.guest.v1.TerminalInput.resize:type_name -> coder.guest.v1.TerminalSize
-	2, // 3: coder.guest.v1.Guest.Terminal:input_type -> coder.guest.v1.TerminalInput
-	4, // 4: coder.guest.v1.Guest.Ping:input_type -> coder.guest.v1.PingRequest
-	3, // 5: coder.guest.v1.Guest.Terminal:output_type -> coder.guest.v1.TerminalOutput
-	5, // 6: coder.guest.v1.Guest.Ping:output_type -> coder.guest.v1.PingResponse
-	5, // [5:7] is the sub-list for method output_type
-	3, // [3:5] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	4, // 3: coder.guest.v1.ForwardRequest.open:type_name -> coder.guest.v1.ForwardOpen
+	5, // 4: coder.guest.v1.ForwardResponse.opened:type_name -> coder.guest.v1.ForwardOpened
+	2, // 5: coder.guest.v1.Guest.Terminal:input_type -> coder.guest.v1.TerminalInput
+	6, // 6: coder.guest.v1.Guest.Forward:input_type -> coder.guest.v1.ForwardRequest
+	8, // 7: coder.guest.v1.Guest.Ping:input_type -> coder.guest.v1.PingRequest
+	3, // 8: coder.guest.v1.Guest.Terminal:output_type -> coder.guest.v1.TerminalOutput
+	7, // 9: coder.guest.v1.Guest.Forward:output_type -> coder.guest.v1.ForwardResponse
+	9, // 10: coder.guest.v1.Guest.Ping:output_type -> coder.guest.v1.PingResponse
+	8, // [8:11] is the sub-list for method output_type
+	5, // [5:8] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	5, // [5:5] is the sub-list for extension extendee
+	0, // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_guest_proto_init() }
@@ -447,13 +711,21 @@ func file_guest_proto_init() {
 		(*TerminalOutput_Data)(nil),
 		(*TerminalOutput_ExitCode)(nil),
 	}
+	file_guest_proto_msgTypes[6].OneofWrappers = []any{
+		(*ForwardRequest_Open)(nil),
+		(*ForwardRequest_Data)(nil),
+	}
+	file_guest_proto_msgTypes[7].OneofWrappers = []any{
+		(*ForwardResponse_Opened)(nil),
+		(*ForwardResponse_Data)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_guest_proto_rawDesc), len(file_guest_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

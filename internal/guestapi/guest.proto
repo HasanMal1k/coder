@@ -12,6 +12,13 @@ service Guest {
   // closes it, which kills the shell.
   rpc Terminal(stream TerminalInput) returns (stream TerminalOutput);
 
+  // Forward connects to a TCP port on the machine's loopback interface and
+  // relays bytes both ways. The first request message must be open; the
+  // guest answers with opened once connected, or fails the call if nothing
+  // is listening. The client half-closing closes the write side of the TCP
+  // connection; the stream ends when the machine's side closes.
+  rpc Forward(stream ForwardRequest) returns (stream ForwardResponse);
+
   // Ping checks that the guest is alive.
   rpc Ping(PingRequest) returns (PingResponse);
 }
@@ -40,6 +47,26 @@ message TerminalOutput {
     bytes data = 1;
     // exit_code is sent once, as the last message, when the shell exits.
     int32 exit_code = 2;
+  }
+}
+
+message ForwardOpen {
+  uint32 port = 1;
+}
+
+message ForwardOpened {}
+
+message ForwardRequest {
+  oneof msg {
+    ForwardOpen open = 1;
+    bytes data = 2;
+  }
+}
+
+message ForwardResponse {
+  oneof msg {
+    ForwardOpened opened = 1;
+    bytes data = 2;
   }
 }
 

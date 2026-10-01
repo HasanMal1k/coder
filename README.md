@@ -1,7 +1,7 @@
 # coder
 
 A cloud development platform: every user gets their own persistent Linux
-machines, reachable from a terminal in the browser.
+machines, each with VS Code and a terminal in the browser.
 
 - [web/](web/) — the frontend (Next.js)
 - [docs/API.md](docs/API.md) — the HTTP and WebSocket API
@@ -18,14 +18,18 @@ make image                # the machine image users boot (takes a few minutes th
 make run                  # the server, on :8080
 ```
 
-In a second terminal, start the frontend and open http://localhost:3000:
+In a second terminal, start the frontend:
 
 ```bash
 make web
 ```
 
-Use `localhost`, not `127.0.0.1`: the server only accepts browsers from the
-origins listed in `CORS_ALLOWED_ORIGINS`.
+Then open **http://coder.localhost:3000**. Browsers resolve every `*.localhost`
+name to your own computer, so this needs no setup.
+
+Use that address rather than plain `localhost:3000`. Each machine's editor is
+served at `<port>-<id>.coder.localhost:8080`, and the editor only works fully
+when the app and the machines are on the same site (`coder.localhost`).
 
 ### Without the frontend
 
@@ -56,6 +60,7 @@ internal/auth         users and tokens
 internal/instance     machine lifecycle and ownership
 internal/sandbox      where machines run (docker/ today)
 internal/tunnel       connections from machines to the control plane
+internal/portproxy    serves machines' ports (the editor) to the browser
 internal/guest        guestd's terminal server
 internal/guestapi     protocol between control plane and guestd
 internal/httpapi      REST handlers
@@ -74,5 +79,5 @@ make image    # rebuild after changing anything guestd uses
 make proto    # regenerate internal/guestapi after editing guest.proto
 ```
 
-Machines created by an older image keep running the old `guestd`; delete and
-recreate them to pick up a new one.
+Machines created by an older image keep running the old `guestd` and tools;
+delete and recreate them to pick up new ones.

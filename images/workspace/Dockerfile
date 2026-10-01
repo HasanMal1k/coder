@@ -47,10 +47,33 @@ RUN userdel -r ubuntu \
     && echo "coder ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/coder \
     && chmod 0440 /etc/sudoers.d/coder
 
+# The editor: VS Code in the browser. guestd starts it and the control plane
+# proxies to it, so it needs no configuration of its own here.
+ARG CODE_SERVER_VERSION=4.139.1
+RUN arch="$(dpkg --print-architecture)" \
+    && curl -fsSL -o /tmp/code-server.deb \
+        "https://github.com/coder/code-server/releases/download/v${CODE_SERVER_VERSION}/code-server_${CODE_SERVER_VERSION}_${arch}.deb" \
+    && dpkg -i /tmp/code-server.deb \
+    && rm /tmp/code-server.deb
+
 COPY --from=guestd /out/guestd /usr/local/bin/guestd
 
 USER coder
 WORKDIR /home/coder
+
+# Editor defaults for a new machine. They live in the home folder, so each
+# user's own changes to them persist. VS Code's built-in chat is turned off:
+# it depends on a service that isn't available here.
+RUN mkdir -p /home/coder/.local/share/code-server/User \
+    && printf '%s\n' \
+        '{' \
+        '  "workbench.startupEditor": "none",' \
+        '  "workbench.colorTheme": "Default Dark Modern",' \
+        '  "workbench.secondarySideBar.defaultVisibility": "hidden",' \
+        '  "chat.disableAIFeatures": true,' \
+        '  "telemetry.telemetryLevel": "off"' \
+        '}' \
+        > /home/coder/.local/share/code-server/User/settings.json
 
 # The guest daemon is the machine's main process: it connects to the control
 # plane and runs the user's terminals.

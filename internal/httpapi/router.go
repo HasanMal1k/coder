@@ -9,10 +9,11 @@ import (
 	"github.com/HasanMal1k/coder/internal/auth"
 	"github.com/HasanMal1k/coder/internal/instance"
 	"github.com/HasanMal1k/coder/internal/middleware"
+	"github.com/HasanMal1k/coder/internal/portproxy"
 	"github.com/HasanMal1k/coder/internal/wsgateway"
 )
 
-func NewRouter(authSvc *auth.Service, instanceSvc *instance.Service, gateway *wsgateway.Gateway, allowedOrigins []string) chi.Router {
+func NewRouter(authSvc *auth.Service, instanceSvc *instance.Service, gateway *wsgateway.Gateway, proxy *portproxy.Proxy, allowedOrigins []string) chi.Router {
 	r := chi.NewRouter()
 
 	// Lets a frontend served from another origin call the API. With no
@@ -25,7 +26,7 @@ func NewRouter(authSvc *auth.Service, instanceSvc *instance.Service, gateway *ws
 	}))
 
 	authHandler := NewAuthHandler(authSvc)
-	instanceHandler := NewInstanceHandler(instanceSvc)
+	instanceHandler := NewInstanceHandler(instanceSvc, proxy)
 
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
@@ -49,6 +50,7 @@ func NewRouter(authSvc *auth.Service, instanceSvc *instance.Service, gateway *ws
 		r.Delete("/instances/{id}", instanceHandler.Delete)
 		r.Post("/instances/{id}/start", instanceHandler.Start)
 		r.Post("/instances/{id}/stop", instanceHandler.Stop)
+		r.Post("/instances/{id}/ports/{port}/url", instanceHandler.PortURL)
 	})
 
 	return r

@@ -3,10 +3,19 @@
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useCallback, useState } from "react";
-import { ApiError, errorMessage, getInstance, startInstance, type Instance } from "@/lib/api";
+import {
+  ApiError,
+  errorMessage,
+  getInstance,
+  IDE_PORT,
+  portUrl,
+  startInstance,
+  type Instance,
+} from "@/lib/api";
 import type { Session } from "@/lib/session";
 import { usePolling } from "@/lib/use-polling";
 import { AppHeader } from "./app-header";
+import { IDE_PATH, IdeView } from "./ide-view";
 import { StatusBadge } from "./status-badge";
 import { Button, buttonClass, ErrorNote, PageSpinner, Spinner } from "./ui";
 
@@ -18,6 +27,8 @@ const TerminalView = dynamic(() => import("./terminal-view"), {
 
 const REFRESH_INTERVAL_MS = 5000;
 
+type Tab = "code" | "terminal";
+
 export function Workspace({ session, id }: { session: Session; id: string }) {
   const { token } = session;
 
@@ -25,6 +36,10 @@ export function Workspace({ session, id }: { session: Session; id: string }) {
   const [instance, setInstance] = useState<Instance | "missing" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+  const [tab, setTab] = useState<Tab>("code");
+  // The terminal's shell starts the first time its tab is opened, and then
+  // keeps running while the user is on the other tab.
+  const [terminalOpened, setTerminalOpened] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -52,6 +67,25 @@ export function Workspace({ session, id }: { session: Session; id: string }) {
       refresh();
     } finally {
       setStarting(false);
+    }
+  }
+
+  function selectTab(next: Tab) {
+    setTab(next);
+    if (next === "terminal") setTerminalOpened(true);
+  }
+
+  /** Opens the editor in its own browser tab. */
+  async function openEditorInNewTab() {
+    // Open the tab now, while the browser still counts this as the user's
+    // click; a window opened after waiting for the network gets blocked.
+    const opened = window.open("", "_blank");
+    try {
+      const url = await portUrl(token, id, IDE_PORT, IDE_PATH);
+      if (opened) opened.location.href = url;
+    } catch (err) {
+      opened?.close();
+      setError(errorMessage(err));
     }
   }
 
@@ -92,7 +126,47 @@ export function Workspace({ session, id }: { session: Session; id: string }) {
           </Link>
         </Notice>
       ) : status === "running" ? (
-        <TerminalView instanceId={id} token={token} onEnded={refresh} />
+        <>
+          <div className="flex h-10 shrink-0 items-center gap-1 border-b border-line bg-surface px-2 sm:px-4">
+            <div role="tablist" aria-label="Machine views" className="flex h-full items-stretch gap-1">
+              <TabButton selected={tab === "code"} onClick={() => selectTab("code")}>
+                Code
+              </TabButton>
+              <TabButton selected={tab === "terminal"} onClick={() => selectTab("terminal")}>
+                Terminal
+              </TabButton>
+            </div>
+            <span className="flex-1" />
+            {error && <span className="truncate text-xs text-danger">{error}</span>}
+            <button
+              type="button"
+              onClick={openEditorInNewTab}
+              className="rounded px-2 py-1 text-xs whitespace-nowrap text-muted outline-none hover:text-fg focus-visible:ring-2 focus-visible:ring-accent/70"
+            >
+              Open editor in new tab ↗
+            </button>
+          </div>
+
+          {/* Both views stay mounted so switching tabs loses nothing: the
+              editor keeps its open files, the terminal its running shell.
+
+              The inactive one is hidden with display: none. A hidden editor
+              can still take keyboard focus when it finishes loading; the
+              terminal watches for that and takes it back. */}
+          <div className={tab === "code" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
+            <IdeView instanceId={id} token={token} />
+          </div>
+          {terminalOpened && (
+            <div className={tab === "terminal" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
+              <TerminalView
+                instanceId={id}
+                token={token}
+                active={tab === "terminal"}
+                onEnded={refresh}
+              />
+            </div>
+          )}
+        </>
       ) : status === "stopped" || status === "error" ? (
         <Notice title={status === "error" ? "This machine hit an error" : "This machine is stopped"}>
           <p className="text-sm text-muted">
@@ -114,6 +188,30 @@ export function Workspace({ session, id }: { session: Session; id: string }) {
         </Notice>
       )}
     </div>
+  );
+}
+
+function TabButton({
+  selected,
+  onClick,
+  children,
+}: {
+  selected: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={selected}
+      onClick={onClick}
+      className={`border-b-2 px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-accent/70 ${
+        selected ? "border-accent text-fg" : "border-transparent text-muted hover:text-fg"
+      }`}
+    >
+      {children}
+    </button>
   );
 }
 
