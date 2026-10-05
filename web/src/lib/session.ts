@@ -4,6 +4,7 @@ import type { User } from "./api";
 export type Session = { token: string; user: User };
 
 const SESSION_KEY = "coder.session";
+const RETURN_TO_KEY = "coder.returnTo";
 
 // undefined means "not read from storage yet".
 let cached: Session | null | undefined;
@@ -13,14 +14,22 @@ const listeners = new Set<() => void>();
 // memory only: it is meant for the navigation that follows, not for later.
 let notice: string | null = null;
 
-/** Whether a JWT's `exp` claim is in the past. Unreadable tokens count as expired. */
-function isExpired(token: string) {
+// Set when the user chose to sign out, as opposed to being signed out. They
+// asked to leave, so the next sign-in shouldn't drop them back where they
+// were (it may not even be the same person).
+let leftOnPurpose = false;
+
+/**
+ * When a JWT expires, in milliseconds since the epoch: Infinity for a token
+ * that never does (it carries no expiry), 0 if the token can't be read.
+ */
+export function tokenExpiresAt(token: string) {
   try {
     const payload = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
     const { exp } = JSON.parse(atob(payload)) as { exp?: number };
-    return typeof exp !== "number" || exp * 1000 <= Date.now();
+    return typeof exp === "number" ? exp * 1000 : Infinity;
   } catch {
-    return true;
+    return 0;
   }
 }
 
@@ -30,7 +39,7 @@ function read(): Session | null {
     if (!raw) return null;
 
     const session = JSON.parse(raw) as Session;
-    if (!session.token || !session.user || isExpired(session.token)) {
+    if (!session.token || !session.user || tokenExpiresAt(session.token) <= Date.now()) {
       localStorage.removeItem(SESSION_KEY);
       return null;
     }
@@ -59,12 +68,13 @@ export function setSession(session: Session) {
   notify();
 }
 
-/** Signs out. `notice`, if given, is shown once on the login page. */
+/** Signs out. `reason`, if given, is shown once on the login page. */
 export function clearSession(reason?: string) {
   if (getSession() === null) return;
 
   cached = null;
   notice = reason ?? null;
+  leftOnPurpose = reason === undefined;
   try {
     localStorage.removeItem(SESSION_KEY);
   } catch {
@@ -80,6 +90,35 @@ export function peekNotice() {
 
 export function dismissNotice() {
   notice = null;
+}
+
+/**
+ * Remembers the page a signed-out visitor was trying to reach, so signing in
+ * can take them there instead of to the home page.
+ */
+export function rememberReturnTo(path: string) {
+  if (leftOnPurpose) {
+    leftOnPurpose = false;
+    return;
+  }
+
+  try {
+    if (path && path !== "/") sessionStorage.setItem(RETURN_TO_KEY, path);
+  } catch {
+    // Without storage they simply land on the home page.
+  }
+}
+
+/** The remembered page, once. Only ever a path within this app. */
+export function takeReturnTo() {
+  try {
+    const path = sessionStorage.getItem(RETURN_TO_KEY);
+    sessionStorage.removeItem(RETURN_TO_KEY);
+    if (path && path.startsWith("/") && !path.startsWith("//")) return path;
+  } catch {
+    // Fall through.
+  }
+  return "/";
 }
 
 function subscribe(listener: () => void) {

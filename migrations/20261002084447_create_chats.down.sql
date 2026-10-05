@@ -1,0 +1,5 @@
+DROP TABLE IF EXISTS agent_notes;
+DROP TABLE IF EXISTS agent_tasks;
+DROP TABLE IF EXISTS agents;
+DROP TABLE IF EXISTS chat_events;
+DROP TABLE IF EXISTS chats;

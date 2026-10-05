@@ -24,6 +24,8 @@ type Instance struct {
 	CPUs      int
 	MemoryMB  int
 	DiskGB    int
+	// Stack is the toolchain the machine was created with.
+	Stack     string
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -32,7 +34,7 @@ type Instance struct {
 // with the same name.
 var ErrInstanceNameTaken = errors.New("instance name already in use")
 
-const instanceColumns = `id, owner_id, name, status, provider, machine_id, volume_id, cpus, memory_mb, disk_gb, created_at, updated_at`
+const instanceColumns = `id, owner_id, name, status, provider, machine_id, volume_id, cpus, memory_mb, disk_gb, stack, created_at, updated_at`
 
 type InstanceRepository struct {
 	db *pgxpool.Pool
@@ -51,10 +53,10 @@ func (r *InstanceRepository) Create(ctx context.Context, inst *Instance, guestTo
 	inst.ID = uuid.NewString()
 
 	err := r.db.QueryRow(ctx,
-		`INSERT INTO instances (id, owner_id, name, status, provider, machine_id, volume_id, cpus, memory_mb, disk_gb, guest_token_hash)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		`INSERT INTO instances (id, owner_id, name, status, provider, machine_id, volume_id, cpus, memory_mb, disk_gb, stack, guest_token_hash)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		 RETURNING created_at, updated_at`,
-		inst.ID, inst.OwnerID, inst.Name, inst.Status, inst.Provider, inst.MachineID, inst.VolumeID, inst.CPUs, inst.MemoryMB, inst.DiskGB, guestTokenHash,
+		inst.ID, inst.OwnerID, inst.Name, inst.Status, inst.Provider, inst.MachineID, inst.VolumeID, inst.CPUs, inst.MemoryMB, inst.DiskGB, inst.Stack, guestTokenHash,
 	).Scan(&inst.CreatedAt, &inst.UpdatedAt)
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -92,6 +94,31 @@ func (r *InstanceRepository) GetByID(ctx context.Context, id, ownerID string) (*
 	return inst, nil
 }
 
+// GetForMachine returns the instance whoever owns it. It is for requests
+// made by the machine itself, which has proved it is that instance; never for
+// answering a user's request.
+func (r *InstanceRepository) GetForMachine(ctx context.Context, id string) (*Instance, error) {
+	rows, err := r.db.Query(ctx,
+		`SELECT `+instanceColumns+`
+		 FROM instances
+		 WHERE id = $1`,
+		id,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("get instance: %w", err)
+	}
+
+	inst, err := pgx.CollectExactlyOneRow(rows, scanInstance)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("get instance: %w", err)
+	}
+
+	return inst, nil
+}
+
 // GuestTokenHash returns the stored hash of the instance's guest token. It is
 // not owner-scoped: the caller is the machine itself, not a user.
 func (r *InstanceRepository) GuestTokenHash(ctx context.Context, id string) ([]byte, error) {
@@ -111,6 +138,28 @@ func (r *InstanceRepository) GuestTokenHash(ctx context.Context, id string) ([]b
 	}
 
 	return hash, nil
+}
+
+// ListByStatus returns every instance in the given status, whoever owns it.
+// It is for background work, never for answering a user's request.
+func (r *InstanceRepository) ListByStatus(ctx context.Context, status string) ([]*Instance, error) {
+	rows, err := r.db.Query(ctx,
+		`SELECT `+instanceColumns+`
+		 FROM instances
+		 WHERE status = $1
+		 ORDER BY created_at`,
+		status,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list instances by status: %w", err)
+	}
+
+	instances, err := pgx.CollectRows(rows, scanInstance)
+	if err != nil {
+		return nil, fmt.Errorf("list instances by status: %w", err)
+	}
+
+	return instances, nil
 }
 
 // ListByOwner returns the owner's instances, oldest first.
@@ -221,7 +270,7 @@ func scanInstance(row pgx.CollectableRow) (*Instance, error) {
 	var inst Instance
 	err := row.Scan(
 		&inst.ID, &inst.OwnerID, &inst.Name, &inst.Status, &inst.Provider,
-		&inst.MachineID, &inst.VolumeID, &inst.CPUs, &inst.MemoryMB, &inst.DiskGB,
+		&inst.MachineID, &inst.VolumeID, &inst.CPUs, &inst.MemoryMB, &inst.DiskGB, &inst.Stack,
 		&inst.CreatedAt, &inst.UpdatedAt,
 	)
 	if err != nil {

@@ -10,13 +10,16 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/HasanMal1k/coder/internal/assistant"
 	"github.com/HasanMal1k/coder/internal/auth"
 	"github.com/HasanMal1k/coder/internal/config"
 	"github.com/HasanMal1k/coder/internal/httpapi"
 	"github.com/HasanMal1k/coder/internal/instance"
+	"github.com/HasanMal1k/coder/internal/llmgateway"
 	"github.com/HasanMal1k/coder/internal/portproxy"
 	"github.com/HasanMal1k/coder/internal/sandbox/docker"
 	"github.com/HasanMal1k/coder/internal/store"
+	"github.com/HasanMal1k/coder/internal/teamapi"
 	"github.com/HasanMal1k/coder/internal/tunnel"
 	"github.com/HasanMal1k/coder/internal/wsgateway"
 )
@@ -24,6 +27,9 @@ import (
 // shutdownTimeout is how long in-flight requests get to finish after we are
 // asked to stop.
 const shutdownTimeout = 30 * time.Second
+
+// modelTimeout bounds one request to the model for the assistant's next step.
+const modelTimeout = 5 * time.Minute
 
 func main() {
 	if err := run(); err != nil {
@@ -57,14 +63,22 @@ func run() error {
 
 	userRepo := store.NewUserRepository(pool)
 	instanceRepo := store.NewInstanceRepository(pool)
+	chatRepo := store.NewChatRepository(pool)
+	agentRepo := store.NewAgentRepository(pool)
 
-	authSvc := auth.NewService(userRepo, []byte(cfg.JWTSecret), 15*time.Minute)
+	authSvc := auth.NewService(userRepo, []byte(cfg.JWTSecret), cfg.AccessTokenTTL)
+	if cfg.AccessTokenTTL > 0 {
+		log.Printf("access tokens last %s", cfg.AccessTokenTTL)
+	} else {
+		log.Printf("access tokens never expire")
+	}
 
 	hub := tunnel.NewHub()
 	instanceSvc := instance.NewService(instanceRepo, provisioner, hub, instance.Config{
 		Provider:        "docker",
 		Image:           cfg.WorkspaceImage,
 		GuestConnectURL: cfg.GuestConnectURL,
+		IdleStopAfter:   cfg.IdleStopAfter,
 	})
 
 	// Nothing is in flight yet, so any instance still mid-operation was cut
@@ -77,13 +91,73 @@ func run() error {
 		log.Printf("marked %d interrupted instance(s) as errored", recovered)
 	}
 
+	if cfg.IdleStopAfter > 0 {
+		log.Printf("machines stop after %s with nobody connected", cfg.IdleStopAfter)
+	} else {
+		log.Printf("machines are never stopped for being idle")
+	}
+	go instanceSvc.RunIdleStop(ctx)
+
+	// The assistant: a model that directs the coding agents inside machines.
+	// Without a key for the model it is switched off, and everything else
+	// works as before.
+	var model assistant.LLM
+	if cfg.ModelAPIKey != "" {
+		model = &assistant.ChatCompletions{
+			BaseURL: cfg.ModelBaseURL,
+			APIKey:  cfg.ModelAPIKey,
+			Model:   cfg.ModelName,
+			Client:  &http.Client{Timeout: modelTimeout},
+		}
+		log.Printf("assistant is on, using %s at %s", cfg.ModelName, cfg.ModelBaseURL)
+	} else {
+		log.Printf("assistant is off: DEEPSEEK_API_KEY is not set")
+	}
+
+	fleet := assistant.NewFleet(instanceSvc, agentRepo)
+	assistantSvc := assistant.NewService(assistant.Stores{
+		Chats:    chatRepo,
+		Agents:   agentRepo,
+		Designs:  store.NewArchitectureRepository(pool),
+		Services: store.NewServiceRepository(pool),
+	}, model, fleet)
+
+	// As with instances: a chat or an agent still marked as working was cut
+	// off.
+	interrupted, err := assistantSvc.RecoverInterrupted(ctx)
+	if err != nil {
+		return err
+	}
+	if interrupted > 0 {
+		log.Printf("freed %d chat(s) the assistant was working on when the server stopped", interrupted)
+	}
+
 	gateway := wsgateway.New(authSvc, instanceSvc, cfg.AllowedOrigins)
 	proxy := portproxy.New(portproxy.Config{
 		Host:   cfg.WorkspaceHost,
 		Scheme: cfg.WorkspaceScheme,
 		Secret: []byte(cfg.JWTSecret),
+		// A design can give a path on one machine's address to another
+		// machine; the assistant knows the designs.
+		Router: assistantSvc,
 	}, instanceSvc)
-	router := httpapi.NewRouter(authSvc, instanceSvc, gateway, proxy, cfg.AllowedOrigins)
+	models := llmgateway.New(llmgateway.Config{
+		BaseURL: cfg.ModelBaseURL,
+		APIKey:  cfg.ModelAPIKey,
+		Model:   cfg.ModelName,
+	}, instanceSvc, fleet)
+
+	router := httpapi.NewRouter(httpapi.Deps{
+		Auth:           authSvc,
+		Instances:      instanceSvc,
+		Assistant:      assistantSvc,
+		AssistantModel: cfg.ModelName,
+		Gateway:        gateway,
+		Proxy:          proxy,
+		Models:         models,
+		Team:           teamapi.New(instanceSvc, assistantSvc),
+		AllowedOrigins: cfg.AllowedOrigins,
+	})
 
 	srv := &http.Server{
 		Addr: ":" + cfg.Port,

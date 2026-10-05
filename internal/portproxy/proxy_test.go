@@ -29,6 +29,35 @@ const (
 type fakeDialer struct {
 	addr string
 	err  error
+
+	mu sync.Mutex
+	// inUse counts MachineConnected calls not yet released, per machine.
+	inUse map[string]int
+	// used counts every MachineConnected call, per machine.
+	used map[string]int
+}
+
+func (d *fakeDialer) MachineConnected(instanceID string) func() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.inUse == nil {
+		d.inUse, d.used = map[string]int{}, map[string]int{}
+	}
+	d.inUse[instanceID]++
+	d.used[instanceID]++
+
+	return func() {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		d.inUse[instanceID]--
+	}
+}
+
+func (d *fakeDialer) counts(instanceID string) (inUse, used int) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.inUse[instanceID], d.used[instanceID]
 }
 
 func (d *fakeDialer) DialPort(ctx context.Context, instanceID string, port int) (net.Conn, error) {
@@ -378,6 +407,116 @@ func TestMachineProblemsAreExplained(t *testing.T) {
 		if retries := strings.Contains(body, `http-equiv="refresh"`); retries != tt.wantRetry {
 			t.Errorf("%v: page retries = %v, want %v", tt.err, retries, tt.wantRetry)
 		}
+	}
+}
+
+func TestRequestsCountAsUsingTheMachine(t *testing.T) {
+	h := newHarness(t)
+	client := h.browser(t)
+
+	// A request without a session never reaches the machine, so it must not
+	// keep the machine alive either.
+	get(t, client, machineURL(instanceA, "8000", "/"))
+	if _, used := h.dialer.counts(instanceA); used != 0 {
+		t.Fatalf("an unauthenticated request was counted as use (%d)", used)
+	}
+
+	h.signIn(t, client)
+	if _, used := h.dialer.counts(instanceA); used == 0 {
+		t.Error("a proxied request was not counted as use")
+	}
+	// The client has its response a moment before the server's handler
+	// returns and gives the use back, so this is waited for, not asserted
+	// at once.
+	h.waitUnused(t, "after the requests finished")
+
+	// A WebSocket counts for as long as it is open.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	conn, _, err := websocket.Dial(ctx, "ws://8000-"+instanceA+"."+testHost+"/ws", &websocket.DialOptions{HTTPClient: client})
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	if inUse, _ := h.dialer.counts(instanceA); inUse != 1 {
+		t.Errorf("in use = %d while a WebSocket is open, want 1", inUse)
+	}
+
+	// The test backend answers one message and closes.
+	conn.Write(ctx, websocket.MessageText, []byte("bye"))
+	conn.Read(ctx)
+	conn.CloseNow()
+
+	h.waitUnused(t, "after the WebSocket closed")
+}
+
+// waitUnused waits for nothing to be using instance A.
+func (h *harness) waitUnused(t *testing.T, when string) {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if inUse, _ := h.dialer.counts(instanceA); inUse == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("machine still counted as in use %s", when)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// routes is a Router with one route.
+type routes struct {
+	from   target
+	prefix string
+	to     target
+}
+
+func (r routes) Route(_ context.Context, instanceID string, port int, path string) (string, int, bool) {
+	if instanceID == r.from.instanceID && port == r.from.port && strings.HasPrefix(path, r.prefix) {
+		return r.to.instanceID, r.to.port, true
+	}
+	return "", 0, false
+}
+
+func TestAPathCanLeadToAnotherMachine(t *testing.T) {
+	h := newHarness(t)
+	// /api on machine A's port 8000 belongs to machine B's port 9000.
+	h.proxy.router = routes{
+		from:   target{instanceID: instanceA, port: 8000},
+		prefix: "/api",
+		to:     target{instanceID: instanceB, port: 9000},
+	}
+	client := h.browser(t)
+	h.signIn(t, client)
+
+	// Which machine served a request is told by which one was counted as
+	// in use for it.
+	usedA := func() int { _, used := h.dialer.counts(instanceA); return used }
+	usedB := func() int { _, used := h.dialer.counts(instanceB); return used }
+
+	// The browser is signed in to A only, and asks A.
+	beforeA, beforeB := usedA(), usedB()
+	status, _ := get(t, client, machineURL(instanceA, "8000", "/api/orders"))
+	if status != http.StatusOK {
+		t.Fatalf("status = %d", status)
+	}
+	if usedB() != beforeB+1 || usedA() != beforeA {
+		t.Errorf("a routed request used A %d times and B %d times, want B once and A not at all", usedA()-beforeA, usedB()-beforeB)
+	}
+
+	// Anything else on A stays on A.
+	beforeA, beforeB = usedA(), usedB()
+	get(t, client, machineURL(instanceA, "8000", "/index.html"))
+	if usedA() != beforeA+1 || usedB() != beforeB {
+		t.Errorf("a path with no route used A %d times and B %d times, want A once", usedA()-beforeA, usedB()-beforeB)
+	}
+
+	// The route gives no access of its own: B's address still needs B's
+	// sign-in.
+	if status, _ := get(t, client, machineURL(instanceB, "9000", "/api/orders")); status != http.StatusUnauthorized {
+		t.Errorf("B's own address without a session for it: %d, want 401", status)
 	}
 }
 

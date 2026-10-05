@@ -4,16 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 	"os/exec"
-	"syscall"
-	"time"
 
 	"github.com/HasanMal1k/coder/internal/guestapi"
 )
-
-// ideStopTimeout is how long the editor gets to exit after being asked to.
-const ideStopTimeout = 5 * time.Second
 
 // RunIDE keeps the editor (code-server) running until ctx is cancelled,
 // restarting it with backoff if it exits. If the editor isn't installed it
@@ -29,14 +23,9 @@ func RunIDE(ctx context.Context) {
 		return
 	}
 
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = "/"
-	}
+	home := homeDir()
 
-	backoff := minBackoff
-
-	for {
+	supervise(ctx, "editor", func(ctx context.Context) *exec.Cmd {
 		cmd := exec.CommandContext(ctx, path,
 			"--bind-addr", fmt.Sprintf("127.0.0.1:%d", guestapi.IDEPort),
 			"--auth", "none",
@@ -47,30 +36,7 @@ func RunIDE(ctx context.Context) {
 		)
 		cmd.Env = childEnv()
 		cmd.Dir = home
-		cmd.Stdout = os.Stderr
-		cmd.Stderr = os.Stderr
-		// Ask politely first, so the editor can save its state.
-		cmd.Cancel = func() error {
-			return cmd.Process.Signal(syscall.SIGTERM)
-		}
-		cmd.WaitDelay = ideStopTimeout
 
-		startedAt := time.Now()
-		err := cmd.Run()
-		if ctx.Err() != nil {
-			return
-		}
-		log.Printf("editor exited: %v", err)
-
-		if time.Since(startedAt) > stableAfter {
-			backoff = minBackoff
-		}
-
-		select {
-		case <-time.After(backoff):
-		case <-ctx.Done():
-			return
-		}
-		backoff = min(backoff*2, maxBackoff)
-	}
+		return cmd
+	})
 }

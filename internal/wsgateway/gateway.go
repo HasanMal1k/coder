@@ -55,6 +55,14 @@ type readyMessage struct {
 	Type string `json:"type"`
 }
 
+// presenceMessage answers a presence connection.
+type presenceMessage struct {
+	Type string `json:"type"`
+	// IdleStopSeconds is how long machines keep running after the user's
+	// last connection closes; 0 means they are never stopped for that.
+	IdleStopSeconds int `json:"idle_stop_seconds"`
+}
+
 type exitMessage struct {
 	Type string `json:"type"`
 	Code int    `json:"code"`
@@ -113,6 +121,11 @@ func (g *Gateway) Terminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// An open terminal means the machine is in use, even if its owner has
+	// closed the rest of the app.
+	inUse := g.instances.MachineConnected(chi.URLParam(r, "id"))
+	defer inUse()
+
 	outputDone := make(chan struct{})
 	go func() {
 		defer close(outputDone)
@@ -126,6 +139,61 @@ func (g *Gateway) Terminal(w http.ResponseWriter, r *http.Request) {
 	// terminal and let the output side finish before the connection goes.
 	term.Close()
 	<-outputDone
+}
+
+// Presence is the connection every open tab of the app holds for as long as
+// it is open. It carries no data after the handshake; that it exists is the
+// message. While a user has one, their machines are not stopped for being
+// idle, and when the last one closes, the countdown to stopping them starts.
+//
+// A connection, rather than periodic requests, because the server learns the
+// moment it closes, and because browsers slow timers in background tabs but
+// leave an open connection alone.
+func (g *Gateway) Presence(w http.ResponseWriter, r *http.Request) {
+	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: g.originPatterns})
+	if err != nil {
+		return
+	}
+	defer conn.CloseNow()
+	conn.SetReadLimit(maxMessageBytes)
+
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
+	hello, err := readHello(ctx, conn)
+	if err != nil {
+		conn.Close(websocket.StatusPolicyViolation, "expected an auth message")
+		return
+	}
+
+	user, err := g.auth.ParseJWT(ctx, hello.Token)
+	if err != nil {
+		conn.Close(CloseUnauthorized, "invalid or expired token")
+		return
+	}
+
+	present := g.instances.UserConnected(user.ID)
+	defer present()
+
+	err = writeJSON(ctx, conn, presenceMessage{
+		Type:            "ready",
+		IdleStopSeconds: int(g.instances.IdleStopAfter().Seconds()),
+	})
+	if err != nil {
+		return
+	}
+
+	// The pings are what notice a browser that vanished without closing the
+	// connection, such as a laptop put to sleep.
+	go keepAlive(ctx, conn)
+
+	// Nothing more is expected from the client; reading is how we find out
+	// that it has gone.
+	for {
+		if _, _, err := conn.Read(ctx); err != nil {
+			return
+		}
+	}
 }
 
 // GuestConnect accepts the tunnel a machine's guest daemon opens to us.

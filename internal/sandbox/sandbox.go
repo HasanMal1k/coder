@@ -13,6 +13,10 @@ import (
 // handle, e.g. it was removed out from under us.
 var ErrNotFound = errors.New("sandbox not found")
 
+// ErrImageMissing is returned by Create when the provider doesn't have the
+// image the machine was to be created from.
+var ErrImageMissing = errors.New("machine image not found")
+
 // State is the runtime state of a machine as reported by the provider. It is
 // deliberately coarse: finer lifecycle states (e.g. "starting") belong to the
 // instance domain, not here.

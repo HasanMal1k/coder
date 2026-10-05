@@ -10,6 +10,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"regexp"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/HasanMal1k/coder/internal/guestapi"
+	"github.com/HasanMal1k/coder/internal/presence"
 	"github.com/HasanMal1k/coder/internal/sandbox"
 	"github.com/HasanMal1k/coder/internal/store"
 	"github.com/HasanMal1k/coder/internal/tunnel"
@@ -33,14 +35,6 @@ const (
 	StatusStopping = "stopping"
 	StatusDeleting = "deleting"
 	StatusError    = "error"
-)
-
-// Resources every instance gets for now. They become per-plan once there are
-// plans.
-const (
-	defaultCPUs     = 2
-	defaultMemoryMB = 2048
-	defaultDiskGB   = 10
 )
 
 // operationTimeout bounds a single provider operation.
@@ -82,17 +76,22 @@ var validName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$`)
 type Config struct {
 	// Provider is the name stored on each row, e.g. "docker".
 	Provider string
-	// Image is the machine image new instances boot from.
+	// Image is the machine image new instances boot from, on the default
+	// stack. The other stacks' images are named after it.
 	Image string
 	// GuestConnectURL is where a machine's guest daemon dials the control
 	// plane. It must be reachable from inside the machine.
 	GuestConnectURL string
+	// IdleStopAfter is how long a running machine may go with nobody
+	// connected before it is stopped. Zero means never.
+	IdleStopAfter time.Duration
 }
 
 type Service struct {
 	repo        *store.InstanceRepository
 	provisioner sandbox.Provisioner
 	hub         *tunnel.Hub
+	presence    *presence.Tracker
 	cfg         Config
 }
 
@@ -101,15 +100,38 @@ func NewService(repo *store.InstanceRepository, provisioner sandbox.Provisioner,
 		repo:        repo,
 		provisioner: provisioner,
 		hub:         hub,
+		presence:    presence.NewTracker(),
 		cfg:         cfg,
 	}
 }
 
+// Options says what kind of machine to create.
+type Options struct {
+	// Size is how much machine. The zero Size means the default.
+	Size Size
+	// Stack is the toolchain it comes with. Empty means the default.
+	Stack string
+}
+
 // Create provisions a new machine for ownerID. The instance is left stopped.
-func (s *Service) Create(ctx context.Context, ownerID, name string) (*store.Instance, error) {
+func (s *Service) Create(ctx context.Context, ownerID, name string, opts Options) (*store.Instance, error) {
 	name = strings.TrimSpace(name)
 	if !validName.MatchString(name) {
 		return nil, ErrInvalidName
+	}
+
+	stack, err := StackOf(opts.Stack)
+	if err != nil {
+		return nil, err
+	}
+	size := opts.Size
+
+	if size == (Size{}) {
+		// The defaults are always on offer.
+		size, _ = SizeOf("", 0)
+	}
+	if !size.offered() {
+		return nil, ErrInvalidSize
 	}
 
 	// The machine gets the token; we keep only its hash, so a database leak
@@ -121,9 +143,10 @@ func (s *Service) Create(ctx context.Context, ownerID, name string) (*store.Inst
 		Name:     name,
 		Status:   StatusCreating,
 		Provider: s.cfg.Provider,
-		CPUs:     defaultCPUs,
-		MemoryMB: defaultMemoryMB,
-		DiskGB:   defaultDiskGB,
+		CPUs:     size.CPUs,
+		MemoryMB: size.MemoryMB,
+		DiskGB:   size.DiskGB,
+		Stack:    stack.Name,
 	}
 	if err := s.repo.Create(ctx, inst, hashGuestToken(guestToken)); err != nil {
 		if errors.Is(err, store.ErrInstanceNameTaken) {
@@ -140,7 +163,7 @@ func (s *Service) Create(ctx context.Context, ownerID, name string) (*store.Inst
 		OwnerID:    inst.OwnerID,
 		// Instance names are valid hostnames by construction (see validName).
 		Hostname: inst.Name,
-		Image:    s.cfg.Image,
+		Image:    imageFor(s.cfg.Image, stack.Name),
 		Resources: sandbox.Resources{
 			CPUs:     inst.CPUs,
 			MemoryMB: inst.MemoryMB,
@@ -153,6 +176,11 @@ func (s *Service) Create(ctx context.Context, ownerID, name string) (*store.Inst
 		},
 	})
 	if err != nil {
+		if errors.Is(err, sandbox.ErrImageMissing) {
+			// Nothing was made, and nothing can be until the image is
+			// built: an instance that can only be deleted helps nobody.
+			return nil, errors.Join(ErrStackUnavailable, s.repo.Delete(ctx, inst.ID))
+		}
 		return nil, s.fail(ctx, inst.ID, fmt.Errorf("provision instance: %w", err))
 	}
 
@@ -335,6 +363,25 @@ func (s *Service) AuthenticateGuest(ctx context.Context, id, token string) error
 	return nil
 }
 
+// ForMachine returns the instance a machine is, for a request the machine
+// itself has made. It does no ownership check: the caller must already have
+// authenticated the machine with AuthenticateGuest.
+func (s *Service) ForMachine(ctx context.Context, id string) (*store.Instance, error) {
+	if uuid.Validate(id) != nil {
+		return nil, ErrNotFound
+	}
+
+	inst, err := s.repo.GetForMachine(ctx, id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+
+	return inst, nil
+}
+
 // ServeGuest runs the tunnel to instance id's guest over conn, blocking until
 // it disconnects. The guest must already have passed AuthenticateGuest.
 func (s *Service) ServeGuest(ctx context.Context, id string, conn net.Conn) error {
@@ -347,6 +394,92 @@ func (s *Service) ServeGuest(ctx context.Context, id string, conn net.Conn) erro
 	}
 
 	return s.hub.Serve(ctx, parsed.String(), conn)
+}
+
+// UserConnected records that a user has the app open. The returned function
+// must be called when that connection ends. While it is open, none of the
+// user's machines count as idle.
+func (s *Service) UserConnected(userID string) (done func()) {
+	return s.presence.UserConnected(userID)
+}
+
+// MachineConnected records that a browser is connected to an instance (a
+// terminal, or a request to one of its ports). The returned function must be
+// called when that connection ends. While it is open, the machine doesn't
+// count as idle, whether or not its owner has the app open.
+func (s *Service) MachineConnected(id string) (done func()) {
+	// Use the form of the ID that the idle check compares against.
+	if parsed, err := uuid.Parse(id); err == nil {
+		id = parsed.String()
+	}
+
+	return s.presence.MachineConnected(id)
+}
+
+// IdleStopAfter is how long a machine may go with nobody connected before it
+// is stopped. Zero means machines are never stopped for being idle.
+func (s *Service) IdleStopAfter() time.Duration {
+	return s.cfg.IdleStopAfter
+}
+
+// RunIdleStop stops running machines that nobody has been connected to for
+// IdleStopAfter, checking periodically until ctx is cancelled. It returns at
+// once if idle stopping is turned off.
+//
+// "Nobody" means the owner has the app closed and nothing is connected to the
+// machine itself. A program left running on the machine doesn't count: the
+// point is that closing the browser is enough to stop paying for a machine.
+func (s *Service) RunIdleStop(ctx context.Context) {
+	after := s.cfg.IdleStopAfter
+	if after <= 0 {
+		return
+	}
+
+	// Often enough that a machine stops soon after it becomes due, without
+	// querying the database needlessly for long grace periods.
+	interval := min(max(after/4, 5*time.Second), 30*time.Second)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.stopIdle(ctx, after)
+		}
+	}
+}
+
+func (s *Service) stopIdle(ctx context.Context, after time.Duration) {
+	running, err := s.repo.ListByStatus(ctx, StatusRunning)
+	if err != nil {
+		if ctx.Err() == nil {
+			log.Printf("idle stop: list running instances: %v", err)
+		}
+		return
+	}
+
+	now := time.Now()
+	for _, inst := range running {
+		idle := s.presence.IdleFor(inst.OwnerID, inst.ID, now)
+		if idle < after {
+			continue
+		}
+
+		// Stop claims the instance like any other operation, so this can't
+		// collide with something the user is doing at the same moment: one
+		// of the two simply finds it busy.
+		_, err := s.Stop(ctx, inst.OwnerID, inst.ID)
+		switch {
+		case err == nil:
+			log.Printf("idle stop: stopped %s (%s) after %s with nobody connected", inst.Name, inst.ID, idle.Round(time.Second))
+		case errors.Is(err, ErrBusy), errors.Is(err, ErrNotFound):
+			// The user got there first, or deleted it.
+		default:
+			log.Printf("idle stop: stop %s (%s): %v", inst.Name, inst.ID, err)
+		}
+	}
 }
 
 // RecoverInterrupted marks instances left in a transitional status as failed.

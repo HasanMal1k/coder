@@ -41,9 +41,21 @@ const (
 	dialSuffix = ".guest"
 )
 
-// Dialer opens connections to ports on machines.
-type Dialer interface {
+// Machines is what the proxy needs from the rest of the system.
+type Machines interface {
+	// DialPort opens a connection to a port on a machine.
 	DialPort(ctx context.Context, instanceID string, port int) (net.Conn, error)
+	// MachineConnected is told that a browser is using a machine, so that it
+	// isn't stopped for being idle. The returned function is called when
+	// that use ends.
+	MachineConnected(instanceID string) (done func())
+}
+
+// Router says where a path on a machine's port leads, when it leads to
+// another machine. It is how a page served from one machine calls a backend
+// on another through its own address.
+type Router interface {
+	Route(ctx context.Context, instanceID string, port int, path string) (targetInstanceID string, targetPort int, ok bool)
 }
 
 type Config struct {
@@ -55,11 +67,15 @@ type Config struct {
 	// Secret is the server's signing secret. Grants are signed with a key
 	// derived from it.
 	Secret []byte
+	// Router, if set, is asked where each request should go.
+	Router Router
 }
 
 type Proxy struct {
-	host   string
-	scheme string
+	machines Machines
+	router   Router
+	host     string
+	scheme   string
 	// secureCookies is whether browsers will accept a Secure cookie on
 	// machine origins, which the cross-site cookie attributes require.
 	secureCookies bool
@@ -70,7 +86,7 @@ type Proxy struct {
 
 type targetKey struct{}
 
-func New(cfg Config, dialer Dialer) *Proxy {
+func New(cfg Config, machines Machines) *Proxy {
 	host := strings.ToLower(cfg.Host)
 	hostname := host
 	if h, _, err := net.SplitHostPort(host); err == nil {
@@ -78,8 +94,10 @@ func New(cfg Config, dialer Dialer) *Proxy {
 	}
 
 	p := &Proxy{
-		host:   host,
-		scheme: cfg.Scheme,
+		machines: machines,
+		router:   cfg.Router,
+		host:     host,
+		scheme:   cfg.Scheme,
 		// Browsers treat localhost and its subdomains as secure even over
 		// plain HTTP.
 		secureCookies: cfg.Scheme == "https" || hostname == "localhost" || strings.HasSuffix(hostname, ".localhost"),
@@ -107,7 +125,7 @@ func New(cfg Config, dialer Dialer) *Proxy {
 				if err != nil {
 					return nil, err
 				}
-				return dialer.DialPort(ctx, t.instanceID, t.port)
+				return machines.DialPort(ctx, t.instanceID, t.port)
 			},
 			MaxIdleConnsPerHost: 16,
 			IdleConnTimeout:     90 * time.Second,
@@ -188,6 +206,22 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, t target) {
 	// The session is ours; the program on the machine has no business
 	// seeing it.
 	stripCookie(r, cookieName)
+
+	// The browser is signed in to this machine's port and asked it for this
+	// path. Where the path has been given to another of the same owner's
+	// machines, that is where the request goes. The browser never learns
+	// the other machine's address, and needs no access of its own to it.
+	if p.router != nil {
+		if id, port, ok := p.router.Route(r.Context(), t.instanceID, t.port, r.URL.Path); ok {
+			t = target{instanceID: id, port: port}
+		}
+	}
+
+	// For as long as this request lasts, the machine is in use. For an
+	// ordinary request that is a moment; for a WebSocket, such as the one the
+	// editor holds open, it is until the tab is closed.
+	done := p.machines.MachineConnected(t.instanceID)
+	defer done()
 
 	ctx := context.WithValue(r.Context(), targetKey{}, t)
 	p.forward.ServeHTTP(w, r.WithContext(ctx))
@@ -295,12 +329,15 @@ var errorTemplate = template.Must(template.New("error").Parse(`<!doctype html>
 {{if .Retry}}<meta http-equiv="refresh" content="2">{{end}}
 <title>{{.Title}}</title>
 <style>
-  html { color-scheme: dark; }
-  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0b0d10; color: #e7e9ec;
-         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  :root { color-scheme: dark light; --bg: #15131e; --fg: #ece9f5; --muted: #a8a3bc; }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #fdfcff; --fg: #26223a; --muted: #6f6a86; }
+  }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--fg);
+         font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
   main { max-width: 26rem; padding: 2rem; text-align: center; }
-  h1 { margin: 0 0 .5rem; font-size: 1.125rem; }
-  p { margin: 0; color: #8f97a3; }
+  h1 { margin: 0 0 .5rem; font-size: 1.0625rem; font-weight: 600; }
+  p { margin: 0; color: var(--muted); }
   .retry { margin-top: 1rem; font-size: .8125rem; }
 </style>
 </head>

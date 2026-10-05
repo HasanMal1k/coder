@@ -1,12 +1,14 @@
 // guestd runs inside every user machine. It dials out to the control plane
 // and serves terminals and port forwards over that connection, so machines
-// need no open ports. It also keeps the editor running.
+// need no open ports. It also keeps the editor and the coding agent running,
+// and a copy on disk of what the owner's other agents are doing.
 package main
 
 import (
 	"context"
 	"log"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"github.com/HasanMal1k/coder/internal/guest"
@@ -23,14 +25,13 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	ideDone := make(chan struct{})
-	go func() {
-		defer close(ideDone)
-		guest.RunIDE(ctx)
-	}()
+	var programs sync.WaitGroup
+	programs.Go(func() { guest.RunIDE(ctx) })
+	programs.Go(func() { guest.RunAgent(ctx, cfg) })
+	programs.Go(func() { guest.RunTeamSync(ctx, cfg) })
 
 	guest.Run(ctx, cfg, guest.NewServer())
 
 	log.Printf("shutting down")
-	<-ideDone
+	programs.Wait()
 }

@@ -126,6 +126,32 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// Renew trades the caller's still-valid access token for a new one.
+func (h *AuthHandler) Renew(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.UserFromContext(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "not authenticated"})
+		return
+	}
+
+	token, err := h.svc.Renew(user)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "internal server error"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, AuthResponse{
+		Token: token,
+		User: UserResponse{
+			ID:           user.ID,
+			Email:        user.Email,
+			DisplayName:  user.DisplayName,
+			Organization: user.Organization,
+			Subscription: user.Subscription,
+		},
+	})
+}
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

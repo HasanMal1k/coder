@@ -31,9 +31,13 @@ var ErrInvalidToken = errors.New("invalid token")
 type Service struct {
 	userRepo  *store.UserRepository
 	jwtSecret []byte
-	ttl       time.Duration
+	// ttl is how long an access token is valid for. Zero means it never
+	// expires.
+	ttl time.Duration
 }
 
+// NewService returns an auth service whose access tokens last for ttl, or
+// for ever if ttl is zero.
 func NewService(userRepo *store.UserRepository, jwtSecret []byte, ttl time.Duration) *Service {
 	return &Service{
 		userRepo:  userRepo,
@@ -95,6 +99,14 @@ func (s *Service) Login(ctx context.Context, email, password string) (string, *s
 	return token, user, nil
 }
 
+// Renew issues a fresh access token for a user who has just presented a valid
+// one. Where tokens expire, clients call it while they are in use, so a
+// session lasts as long as the app stays open while each individual token
+// stays short-lived. Where they don't, there is no need to.
+func (s *Service) Renew(user *store.User) (string, error) {
+	return s.generateJWT(user)
+}
+
 func (s *Service) normalizeEmail(email string) string {
 	return strings.ToLower(strings.TrimSpace(email))
 }
@@ -102,9 +114,13 @@ func (s *Service) normalizeEmail(email string) string {
 func (s *Service) generateJWT(user *store.User) (string, error) {
 	now := time.Now()
 	claims := jwt.RegisteredClaims{
-		Subject:   user.ID,
-		IssuedAt:  jwt.NewNumericDate(now),
-		ExpiresAt: jwt.NewNumericDate(now.Add(s.ttl)),
+		Subject:  user.ID,
+		IssuedAt: jwt.NewNumericDate(now),
+	}
+	// A token with no expiry claim is one that doesn't expire: it stays
+	// valid until the signing secret changes or its user is deleted.
+	if s.ttl > 0 {
+		claims.ExpiresAt = jwt.NewNumericDate(now.Add(s.ttl))
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)

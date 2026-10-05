@@ -1,6 +1,7 @@
 package instance
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -34,6 +35,84 @@ func TestValidName(t *testing.T) {
 	for _, tt := range tests {
 		if got := validName.MatchString(tt.name); got != tt.want {
 			t.Errorf("validName(%q) = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestSizeOf(t *testing.T) {
+	tests := []struct {
+		power string
+		disk  int
+		want  Size
+	}{
+		{"", 0, Size{CPUs: 2, MemoryMB: 2048, DiskGB: 10}},
+		{"small", 0, Size{CPUs: 1, MemoryMB: 1024, DiskGB: 10}},
+		{"medium", 20, Size{CPUs: 2, MemoryMB: 2048, DiskGB: 20}},
+		{"large", 50, Size{CPUs: 4, MemoryMB: 4096, DiskGB: 50}},
+	}
+	for _, tt := range tests {
+		got, err := SizeOf(tt.power, tt.disk)
+		if err != nil || got != tt.want {
+			t.Errorf("SizeOf(%q, %d) = %+v, %v; want %+v", tt.power, tt.disk, got, err, tt.want)
+		}
+		if !got.offered() {
+			t.Errorf("SizeOf(%q, %d) returned a size that is not on offer", tt.power, tt.disk)
+		}
+	}
+
+	for _, bad := range []struct {
+		power string
+		disk  int
+	}{
+		{"huge", 10}, {"Small", 10}, {"medium", 15}, {"medium", -10}, {"medium", 1000},
+	} {
+		if got, err := SizeOf(bad.power, bad.disk); !errors.Is(err, ErrInvalidSize) {
+			t.Errorf("SizeOf(%q, %d) = %+v, %v; want ErrInvalidSize", bad.power, bad.disk, got, err)
+		}
+	}
+}
+
+func TestOnlyOfferedSizesAreAccepted(t *testing.T) {
+	for _, size := range []Size{
+		{CPUs: 64, MemoryMB: 2048, DiskGB: 10},
+		{CPUs: 2, MemoryMB: 1024, DiskGB: 10}, // the CPUs of one level with the memory of another
+		{CPUs: 2, MemoryMB: 2048, DiskGB: 11},
+		{CPUs: 2, MemoryMB: 2048},
+	} {
+		if size.offered() {
+			t.Errorf("%+v counts as on offer", size)
+		}
+	}
+}
+
+func TestStacks(t *testing.T) {
+	for _, name := range []string{"", "base", "go", "cpp", "dotnet", "data"} {
+		stack, err := StackOf(name)
+		if err != nil || stack.Name == "" || stack.Has == "" {
+			t.Errorf("StackOf(%q) = %+v, %v", name, stack, err)
+		}
+	}
+	if stack, _ := StackOf(""); stack.Name != DefaultStack {
+		t.Errorf("the default stack is %q, want %q", stack.Name, DefaultStack)
+	}
+	for _, name := range []string{"rust", "Go", "base "} {
+		if _, err := StackOf(name); !errors.Is(err, ErrInvalidStack) {
+			t.Errorf("StackOf(%q): %v, want ErrInvalidStack", name, err)
+		}
+	}
+}
+
+func TestImageFor(t *testing.T) {
+	tests := []struct{ base, stack, want string }{
+		{"coder-workspace:dev", "base", "coder-workspace:dev"},
+		{"coder-workspace:dev", "go", "coder-workspace-go:dev"},
+		{"coder-workspace", "cpp", "coder-workspace-cpp"},
+		{"localhost:5000/coder-workspace", "dotnet", "localhost:5000/coder-workspace-dotnet"},
+		{"registry.example.com:5000/team/workspace:v2", "data", "registry.example.com:5000/team/workspace-data:v2"},
+	}
+	for _, tt := range tests {
+		if got := imageFor(tt.base, tt.stack); got != tt.want {
+			t.Errorf("imageFor(%q, %q) = %q, want %q", tt.base, tt.stack, got, tt.want)
 		}
 	}
 }

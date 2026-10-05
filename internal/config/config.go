@@ -5,14 +5,23 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 )
+
+// defaultIdleStopAfter is long enough to ride out a page reload or a brief
+// loss of connection, and short enough that closing the browser stops
+// machines promptly.
+const defaultIdleStopAfter = 2 * time.Minute
 
 type Config struct {
 	DatabaseURL string
 	JWTSecret   string
 	Port        string
+	// AccessTokenTTL is how long a signed-in user's token is valid for. Zero
+	// means it never expires.
+	AccessTokenTTL time.Duration
 	// WorkspaceImage is the machine image new instances boot from.
 	WorkspaceImage string
 	// GuestConnectURL is where machines dial the control plane. It must be
@@ -25,6 +34,16 @@ type Config struct {
 	// WorkspaceScheme is how browsers reach it, "http" or "https".
 	WorkspaceHost   string
 	WorkspaceScheme string
+	// IdleStopAfter is how long a running machine may go with nobody
+	// connected (the owner's app closed, nothing using the machine) before
+	// it is stopped. Zero turns this off.
+	IdleStopAfter time.Duration
+	// ModelAPIKey is the key for the model the assistant uses. Without one
+	// the assistant is turned off. ModelBaseURL is the root of the model's
+	// OpenAI-compatible API, and ModelName the model to ask for.
+	ModelAPIKey  string
+	ModelBaseURL string
+	ModelName    string
 	// AllowedOrigins are the browser origins (e.g. "http://localhost:5173")
 	// allowed to call the API and open terminals from another origin.
 	AllowedOrigins []string
@@ -46,6 +65,9 @@ func Load() (Config, error) {
 		GuestConnectURL: os.Getenv("GUEST_CONNECT_URL"),
 		WorkspaceHost:   os.Getenv("WORKSPACE_HOST"),
 		WorkspaceScheme: os.Getenv("WORKSPACE_SCHEME"),
+		ModelAPIKey:     os.Getenv("DEEPSEEK_API_KEY"),
+		ModelBaseURL:    os.Getenv("LLM_BASE_URL"),
+		ModelName:       os.Getenv("LLM_MODEL"),
 		AllowedOrigins:  splitList(os.Getenv("CORS_ALLOWED_ORIGINS")),
 	}
 
@@ -80,6 +102,30 @@ func Load() (Config, error) {
 	}
 	if cfg.WorkspaceScheme != "http" && cfg.WorkspaceScheme != "https" {
 		return Config{}, errors.New("WORKSPACE_SCHEME must be http or https")
+	}
+
+	if cfg.ModelBaseURL == "" {
+		cfg.ModelBaseURL = "https://api.deepseek.com/v1"
+	}
+	if cfg.ModelName == "" {
+		cfg.ModelName = "deepseek-chat"
+	}
+
+	if raw := os.Getenv("ACCESS_TOKEN_TTL"); raw != "" {
+		ttl, err := time.ParseDuration(raw)
+		if err != nil || ttl < 0 {
+			return Config{}, errors.New(`ACCESS_TOKEN_TTL must be a duration such as "15m" or "24h", or "0" for tokens that never expire`)
+		}
+		cfg.AccessTokenTTL = ttl
+	}
+
+	cfg.IdleStopAfter = defaultIdleStopAfter
+	if raw := os.Getenv("IDLE_STOP_AFTER"); raw != "" {
+		after, err := time.ParseDuration(raw)
+		if err != nil || after < 0 {
+			return Config{}, errors.New(`IDLE_STOP_AFTER must be a duration such as "2m" or "90s", or "0" to turn it off`)
+		}
+		cfg.IdleStopAfter = after
 	}
 
 	return cfg, nil
