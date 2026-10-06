@@ -28,7 +28,7 @@ export function PageHeader({
   const shortcut = usePaletteShortcut();
 
   return (
-    <header className="flex h-14 shrink-0 items-center gap-2 border-b px-3 sm:px-4">
+    <header className="flex h-14 shrink-0 items-center gap-2 px-3 sm:px-4">
       <SidebarTrigger className="-ml-1" />
       <div aria-hidden className="mr-1 h-5 w-px shrink-0 bg-border" />
 

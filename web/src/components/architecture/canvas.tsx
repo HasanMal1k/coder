@@ -2,12 +2,16 @@
 
 import {
   Background,
+  BackgroundVariant,
   Controls,
+  EdgeLabelRenderer,
+  getSmoothStepPath,
   Handle,
   MarkerType,
   Position,
   ReactFlow,
   type Edge,
+  type EdgeProps,
   type Node,
   type NodeChange,
   type NodeProps,
@@ -43,7 +47,7 @@ import {
   type PowerName,
 } from "@/lib/api";
 import { useAgents } from "@/lib/agents";
-import { DISKS_GB, POWERS, powerLabel, stackLabel } from "@/lib/sizes";
+import { DEFAULT_STACK, DISKS_GB, POWERS, powerName, stackLabel } from "@/lib/sizes";
 import { useElementSize } from "@/lib/use-element-size";
 import { cn } from "@/lib/utils";
 import { StatusDot } from "../status";
@@ -58,6 +62,7 @@ import {
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { Spinner } from "../ui/spinner";
+import { TechLogo, techMark } from "./tech";
 
 const KINDS: Record<NodeKind, { label: string; icon: LucideIcon }> = {
   frontend: { label: "Frontend", icon: AppWindowIcon },
@@ -105,7 +110,10 @@ const CI_GAP = 120;
 /** How long a line's label can be before it is cut short, in characters. */
 const LABEL_MAX = 30;
 
-const FIT = { padding: 0.08, maxZoom: 1.1 };
+/** How fast the dot on a connection travels, in pixels a second. */
+const DOT_SPEED = 70;
+
+const FIT = { padding: 0.08, maxZoom: 1.25 };
 
 type Point = { x: number; y: number };
 
@@ -122,6 +130,17 @@ type NodeData = {
 };
 
 type ComponentNode = Node<NodeData, "component">;
+
+/** What a line is drawn with, beyond the two components it joins. */
+type FlowData = {
+  /** Requests travel along it. A line to or from CI carries none. */
+  requests: boolean;
+  /** The design has not been agreed to yet. */
+  proposed: boolean;
+  label?: string;
+};
+
+type FlowEdge = Edge<FlowData, "flow">;
 
 type Placement = {
   position?: Point;
@@ -279,7 +298,7 @@ export function ArchitectureCanvas({ className, ...props }: CanvasProps & { clas
       ref={ref}
       role="group"
       aria-label="Architecture diagram"
-      className={cn("relative min-h-0 overflow-hidden bg-background", className)}
+      className={cn("relative min-h-0 overflow-hidden", className)}
     >
       {/* Drawn once there is a size to draw it for. Keyed by direction:
           where a node was dragged to means nothing in the other one. */}
@@ -346,7 +365,7 @@ function Diagram({
     [design.nodes, architecture.nodes, instances, agents, positions, placed, proposed],
   );
 
-  const edges = useMemo<Edge[]>(
+  const edges = useMemo<FlowEdge[]>(
     () =>
       design.edges.flatMap((edge) => {
         const from = positions[edge.from];
@@ -367,13 +386,20 @@ function Diagram({
             target: edge.to,
             sourceHandle: `from-${leave}`,
             targetHandle: `to-${arrive}`,
-            label: shorten([edge.label, edge.path].filter(Boolean).join(" · ")) || undefined,
-            type: "smoothstep",
-            // A line still being proposed is drawn dashed; one in use, solid.
-            style: proposed ? { strokeDasharray: "6 4" } : undefined,
-            markerEnd: { type: MarkerType.ArrowClosed },
-            labelBgPadding: [6, 3] as [number, number],
-            labelBgBorderRadius: 6,
+            type: "flow" as const,
+            data: {
+              requests: !fromCI && !toCI,
+              proposed,
+              label: shorten([edge.label, edge.path].filter(Boolean).join(" · ")) || undefined,
+            },
+            // The arrowhead takes the line's grey: fainter on a line that
+            // carries no requests.
+            markerEnd: {
+              type: MarkerType.ArrowClosed,
+              width: 16,
+              height: 16,
+              color: fromCI || toCI ? "rgb(255 255 255 / 0.3)" : "rgb(255 255 255 / 0.5)",
+            },
           },
         ];
       }),
@@ -396,7 +422,7 @@ function Diagram({
 
   // Fitted again whenever the room changes, so that dragging the divider or
   // resizing the window never leaves the design half out of sight.
-  const flow = useRef<ReactFlowInstance<ComponentNode, Edge> | null>(null);
+  const flow = useRef<ReactFlowInstance<ComponentNode, FlowEdge> | null>(null);
   useEffect(() => {
     const frame = requestAnimationFrame(() => flow.current?.fitView(FIT));
     return () => cancelAnimationFrame(frame);
@@ -415,6 +441,7 @@ function Diagram({
         nodes={nodes}
         edges={edges}
         nodeTypes={NODE_TYPES}
+        edgeTypes={EDGE_TYPES}
         onNodesChange={onNodesChange}
         onInit={(instance) => {
           flow.current = instance;
@@ -426,8 +453,10 @@ function Diagram({
         maxZoom={1.5}
         nodesConnectable={false}
         edgesFocusable={false}
+        // The library's own mark in the corner is left off, as its licence allows.
+        proOptions={{ hideAttribution: true }}
       >
-        <Background gap={20} />
+        <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} />
         <Controls showInteractive={false} position="bottom-left" />
       </ReactFlow>
     </EditingContext.Provider>
@@ -441,14 +470,20 @@ function ComponentNodeView({ data }: NodeProps<ComponentNode>) {
   const kind = KINDS[node.kind];
   const working = agents[0];
   const external = node.kind === "external";
+  // Shown by what it is made with where that is recognised, and by what
+  // kind of thing it is where it isn't.
+  const mark = techMark(node.tech);
+  const live = listening === true && machine?.status === "running";
 
   return (
     <div
       aria-label={`${node.name}, ${kind.label}`}
       className={cn(
-        "group/node relative w-60 rounded-lg border bg-card text-card-foreground transition-colors hover:border-foreground/50",
-        (proposed || external) && "border-dashed",
-        working && "border-foreground/70 ring-3 ring-foreground/10",
+        "group/node relative w-60 rounded-xl border bg-card text-card-foreground shadow-lg shadow-black/40 transition-[border-color,box-shadow] hover:border-foreground/25",
+        (proposed || external) && "border-dashed shadow-none",
+        // An agent is at work on it: the one node lit in the accent.
+        working &&
+          "border-primary/70 shadow-[0_0_28px_-6px_var(--primary)] hover:border-primary/70",
       )}
     >
       {/* A way in and a way out on every side; each line uses whichever
@@ -461,19 +496,21 @@ function ComponentNodeView({ data }: NodeProps<ComponentNode>) {
       ))}
 
       <div className="flex items-start gap-3 p-3.5">
-        <div className="flex size-9 shrink-0 items-center justify-center rounded-md border bg-muted text-foreground">
-          <kind.icon className="size-4.5" />
+        <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+          {mark ? <TechLogo mark={mark} className="size-6" /> : <kind.icon className="size-5" />}
         </div>
         <div className="min-w-0 flex-1">
-          <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-            {kind.label}
+          <p className="text-xs text-muted-foreground">{kind.label}</p>
+          <p className="truncate text-sm font-semibold" title={node.name}>
+            {node.name}
           </p>
-          <p className="truncate text-sm font-semibold">{node.name}</p>
-          <p className="truncate text-xs text-muted-foreground">{node.tech}</p>
+          <p className="truncate text-xs text-muted-foreground" title={node.tech}>
+            {node.tech}
+          </p>
         </div>
       </div>
 
-      <div className="flex min-h-9 items-center gap-2 border-t px-3.5 py-2 text-xs">
+      <div className="flex min-h-9 items-center gap-2 rounded-b-xl bg-black/20 px-3.5 py-2 text-xs">
         {external ? (
           <span className="text-muted-foreground">Not on your machines</span>
         ) : working ? (
@@ -489,23 +526,39 @@ function ComponentNodeView({ data }: NodeProps<ComponentNode>) {
         ) : machine ? (
           <>
             <StatusDot status={machine.status} />
-            <span className="font-mono">{machine.name}</span>
+            <span className="min-w-0 truncate font-mono" title={machine.name} translate="no">
+              {machine.name}
+            </span>
             {node.port ? (
               <span
                 className={cn(
-                  "ml-auto shrink-0",
-                  listening ? "text-success" : "text-muted-foreground",
+                  "ml-auto shrink-0 tabular-nums",
+                  live ? "text-success" : "text-muted-foreground",
                 )}
               >
-                {listening ? `Live on :${node.port}` : `:${node.port} not up`}
+                {live ? `Live on :${node.port}` : `:${node.port} not up`}
               </span>
             ) : null}
           </>
         ) : (
           <>
-            <span className="font-mono text-muted-foreground">{node.machine}</span>
-            <span className="ml-auto shrink-0 text-muted-foreground">
-              {[stackLabel(node.stack), powerLabel(node.size), `${node.disk_gb} GB`]
+            <span
+              className="min-w-0 truncate font-mono text-muted-foreground"
+              title={node.machine}
+              translate="no"
+            >
+              {node.machine}
+            </span>
+            {/* What it will be made as, by the names the size menu uses,
+                which leaves room for the machine's own. The stack is said
+                only when it adds something: every machine has the standard
+                tools. */}
+            <span className="ml-auto shrink-0 text-muted-foreground tabular-nums">
+              {[
+                node.stack && node.stack !== DEFAULT_STACK && stackLabel(node.stack),
+                powerName(node.size),
+                `${node.disk_gb} GB`,
+              ]
                 .filter(Boolean)
                 .join(" · ")}
             </span>
@@ -548,6 +601,74 @@ function ComponentNodeView({ data }: NodeProps<ComponentNode>) {
 }
 
 const NODE_TYPES = { component: ComponentNodeView };
+
+/**
+ * A connection between two components: a grey line. On one that requests
+ * travel along, a small dot moves from the component that asks to the one
+ * that answers; one that carries none (CI fetching code) is a thin
+ * dotted line. The words on it sit over its middle.
+ */
+function FlowEdgeView({
+  sourceX,
+  sourceY,
+  sourcePosition,
+  targetX,
+  targetY,
+  targetPosition,
+  markerEnd,
+  data,
+}: EdgeProps<FlowEdge>) {
+  const [path, labelX, labelY] = getSmoothStepPath({
+    sourceX,
+    sourceY,
+    sourcePosition,
+    targetX,
+    targetY,
+    targetPosition,
+    borderRadius: 14,
+  });
+  const requests = data?.requests ?? true;
+  // The dot keeps one pace whatever the distance: a longer line takes it
+  // longer. The line runs along the grid, so its length is near enough the
+  // sum of how far across and how far down it goes.
+  const length = Math.abs(targetX - sourceX) + Math.abs(targetY - sourceY);
+  const travel = { animationDuration: `${Math.max(1.6, length / DOT_SPEED)}s` };
+  // Not agreed to yet: the same line, at half its strength.
+  const strength = data?.proposed ? 0.5 : 1;
+
+  // Each path says for itself that it has no fill. A path is filled black
+  // unless told otherwise, and one that bends then shows as a dark wedge;
+  // left to the stylesheet alone, that is what a page holding an older
+  // stylesheet would draw.
+  return (
+    <>
+      {requests ? (
+        <g opacity={strength}>
+          <path d={path} fill="none" className="flow-line" markerEnd={markerEnd} />
+          <path d={path} fill="none" pathLength={1} className="flow-dot" style={travel} />
+        </g>
+      ) : (
+        <path d={path} fill="none" className="flow-quiet" markerEnd={markerEnd} />
+      )}
+
+      {data?.label && (
+        <EdgeLabelRenderer>
+          <div
+            style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
+            className={cn(
+              "absolute rounded-md bg-stage px-1.5 py-0.5 text-[11px] leading-tight whitespace-nowrap",
+              requests ? "text-muted-foreground" : "text-muted-foreground/70",
+            )}
+          >
+            {data.label}
+          </div>
+        </EdgeLabelRenderer>
+      )}
+    </>
+  );
+}
+
+const EDGE_TYPES = { flow: FlowEdgeView };
 
 function PreviewButton({ machine, port, name }: { machine: Instance; port: number; name: string }) {
   async function open() {

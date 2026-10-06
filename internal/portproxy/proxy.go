@@ -329,15 +329,14 @@ var errorTemplate = template.Must(template.New("error").Parse(`<!doctype html>
 {{if .Retry}}<meta http-equiv="refresh" content="2">{{end}}
 <title>{{.Title}}</title>
 <style>
-  :root { color-scheme: dark light; --bg: #15131e; --fg: #ece9f5; --muted: #a8a3bc; }
-  @media (prefers-color-scheme: light) {
-    :root { --bg: #fdfcff; --fg: #26223a; --muted: #6f6a86; }
-  }
+  /* The app's own colours (web/src/app/globals.css): this page is most often
+     seen inside it, where the editor or a preview would be. */
+  :root { color-scheme: dark; --bg: #171717; --fg: #ececec; --muted: #a3a3a3; }
   body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--fg);
-         font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+         font: 14px/1.5 Geist, system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
   main { max-width: 26rem; padding: 2rem; text-align: center; }
-  h1 { margin: 0 0 .5rem; font-size: 1.0625rem; font-weight: 600; }
-  p { margin: 0; color: var(--muted); }
+  h1 { margin: 0 0 .5rem; font-size: 1rem; font-weight: 600; letter-spacing: -0.01em; text-wrap: balance; }
+  p { margin: 0; color: var(--muted); text-wrap: pretty; }
   .retry { margin-top: 1rem; font-size: .8125rem; }
 </style>
 </head>

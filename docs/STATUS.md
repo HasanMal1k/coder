@@ -1,6 +1,6 @@
 # Where things stand
 
-Last updated: 2026-10-05.
+Last updated: 2026-10-06.
 
 This is the page to read first when picking the project up again. It says
 what exists, what was done most recently, what is known to be wrong, and how
@@ -12,13 +12,14 @@ changes have been checked. Update it at the end of every working session.
 
 ## State of the repository
 
-- Branch `instances-backend`. The last commit is `24ac9be` ("Embed VS Code
-  (code-server) in each machine").
-- **Everything built since then is uncommitted**: around fifty changed files
-  and sixty new paths, some 12,000 added lines (`git status` has the exact
-  list). That is the assistant, agents, designs, services, the chat-first
-  frontend, the panel and its tabs, and all of the documentation of them,
-  this page included. Committing it is the first thing to do.
+- Branch `instances-backend`. The last commit is `08709ab` ("changes", by
+  the owner on 2026-10-05), which holds everything built up to then: the
+  assistant, agents, designs, services, the chat-first frontend, the panel
+  and its tabs, and the documents.
+- **Uncommitted: the frontend pass of 2026-10-06** (see below): some twenty
+  changed files under `web/src`, `internal/portproxy/proxy.go`, the new
+  `tools/uicheck/`, and this page, `CLAUDE.md` and `web/README.md`.
+  `learn/` is the owner's and was not touched.
 - `.env` is ignored by git. It holds a real `DEEPSEEK_API_KEY` and
   `LLM_MODEL=deepseek-v4-pro`.
 
@@ -50,7 +51,7 @@ older image keep the older `guestd`.
   and register programs as services that the machine keeps running.
 - A frontend that is a chat: earlier chats on the left, the chat in the
   middle, and a panel on the right with four tabs (Graph, Frontend, Backend,
-  Dashboard). Black only; styled after Vercel and v0.
+  Dashboard). Dark gray with an orange accent.
 - Every backend must describe its API with an OpenAPI document at
   `/openapi.json`; the platform checks for it and the Backend tab is drawn
   from it.
@@ -68,6 +69,9 @@ older image keep the older `guestd`.
 | 2026-10-04 | Restyled black and white, then black only: the light theme and `next-themes` removed, Geist font, small corners, borders. |
 | 2026-10-04 | The panel's four tabs. `POST /instances/{id}/ports/{port}/request`. The OpenAPI rule and its check. Service revisions: registering a service again restarts it, and the machine reports what it has started. |
 | 2026-10-05 | A review of the whole codebase; its findings are the list below. No code changed. |
+| 2026-10-06 | `learn/` added, for the owner to learn Go from this codebase: five projects to write by hand, each tied to the packages it mirrors (`learn/README.md`), interview notes (`learn/INTERVIEW.md`), and a worked Docker and Compose example that was built and run (`learn/docker-example/`). The example is a Go module of its own, so it is not part of the product's build or of `make test`; `learn` was added to `.dockerignore`. No product code changed. |
+| 2026-10-06 | After the owner looked at it: restyled from black and outlined to dark gray with an orange accent and softer shapes, and the graph redone (logos, glowing lines, no library mark). See [the second round](#the-second-round-the-same-day). |
+| 2026-10-06 | A pass over the frontend, using two skills found for it and installed in `.claude/skills/` (`frontend-design`, Anthropic's; `web-design-guidelines`, Vercel's). What changed is listed under [The frontend pass](#the-frontend-pass-of-2026-10-06). |
 
 ## What has been checked, and what has not
 
@@ -81,6 +85,13 @@ older image keep the older `guestd`.
   66 checks on 2026-10-04, all passing. See [How changes were
   tested](#how-changes-were-tested). The frontend has no tests in the
   repository.
+- **The frontend**, after the pass of 2026-10-06: Prettier, ESLint, `tsc`
+  and `next build` are clean, and `tools/uicheck` drove it in headless
+  Chromium against sample data: 28 checks, all passing, and each screen
+  looked at as a picture at desktop and phone widths. Not checked: any
+  browser but Chromium, a real phone, the editor and terminal on a real
+  running machine (the sample machines are rows only), and anything said by
+  the real model.
 - **With the real model** (DeepSeek, `deepseek-v4-pro`) there has been one
   real chat. It asked its questions, proposed a design of five components on
   four machines, was approved and created the machines. The database agent's
@@ -94,8 +105,9 @@ older image keep the older `guestd`.
 
 ## Open issues
 
-From the review of 2026-10-05. Paths are from the repository root. None has
-been fixed.
+From the review of 2026-10-05, with three added by the frontend pass (21 to
+23). Paths are from the repository root. Two have been dealt with since and
+are struck through; the numbers are kept, since other places refer to them.
 
 ### Fix first
 
@@ -106,7 +118,8 @@ been fixed.
    (`internal/sandbox/docker/docker.go`, `ExtraHosts`). Confirmed from inside
    a machine. Anything running on a machine could read or change every
    user's data. Publish it on `127.0.0.1` only and change the password.
-2. **Nothing since `24ac9be` is committed.**
+2. ~~Nothing since `24ac9be` is committed.~~ Committed by the owner as
+   `08709ab`. The frontend pass after it is not.
 3. **Machine names are shared between chats.** A name is unique per user,
    a design is per chat, and the assistant is told to reuse a machine of the
    right name (`internal/assistant/tools.go`, "Check list_machines first").
@@ -159,10 +172,13 @@ been fixed.
 
 ### Tests and smaller things
 
-15. No frontend tests in the repository, and the end-to-end tooling is not
-    in it either (see below). `web/src/lib/openapi.ts` has no unit tests.
-16. The port proxy's error pages still use the old violet and light colours
-    (`internal/portproxy/proxy.go`, `errorTemplate`).
+15. No unit tests for the frontend (`web/src/lib/openapi.ts` most wants
+    them), and the end-to-end tooling for the assistant is still not in the
+    repository (see below). `tools/uicheck` now is: browser checks of the
+    frontend against sample data, without the model.
+16. ~~The port proxy's error pages still use the old violet and light
+    colours.~~ The app's own colours now (`internal/portproxy/proxy.go`,
+    `errorTemplate`).
 17. `npm audit` reports seven high-severity advisories under `shadcn`'s
     dependencies. They are in command-line tooling, not in what is sent to
     the browser.
@@ -173,6 +189,93 @@ been fixed.
 20. The code's default model name, `deepseek-chat`, is not among the models
     the owner's key lists (`deepseek-flash`, `deepseek-v4-pro`, as of
     2026-10-04). `.env` sets the model, so this only bites a fresh setup.
+21. **What is showing is not in the address.** Which of the panel's tabs is
+    open, the filter on the machines page, and whether a machine's page is
+    on its editor, terminal or overview are all lost on a reload and cannot
+    be linked to (`web/src/components/assistant/assistant-provider.tsx`,
+    `machines/machines-page.tsx`, `workspace/workspace.tsx`).
+22. **Long lists are drawn whole.** A chat's every message, an agent's every
+    log line and every chat in the sidebar are in the page at once. Fine for
+    dozens; a chat with thousands of log lines will be slow.
+23. The panel's tabs still accept being drawn without a chat
+    (`chatId?: string` in `web/src/components/pane/`), which can no longer
+    happen now that a new chat has no panel. Harmless; worth tidying.
+
+## The frontend pass of 2026-10-06
+
+Asked for as "the frontend can be further improved ... a lot better", with
+a skill to be found for it. Two were, read in full before being installed,
+and are in `.claude/skills/`: `frontend-design` (a way of working: plan,
+check the plan against the brief, build, look at screenshots) and
+`web-design-guidelines` (a checklist). The owner's rules for how it looks
+were kept as they are; [web/README.md](../web/README.md#design) now says
+what was added to them.
+
+Things that were wrong, and are fixed:
+
+- A table in a reply broke its words apart on a phone ("Machin e"), and the
+  lines under its rows did not reach the last column.
+- A component in the diagram let its machine's name wrap and its size run
+  out of the box.
+- A machine that could not be reached showed a white page inside the black
+  app (issue 16).
+- A chat did not open quite at its end: the row of machines arriving above
+  left the last message under the box you type in.
+- Opening a chat on a phone raised the keyboard.
+- "Delete chat" deleted at one click. It asks first now.
+- With "reduce motion" on, spinners turned thousands of times a second
+  (the rule shortened animations without stopping them repeating).
+
+Things that are different by design:
+
+- A new chat (`/`) has the page to itself. The panel, which had nothing to
+  show there, arrives with the chat. **This is the one change to how the
+  app is laid out; say if the panel should be there from the start.**
+- No picture beside the assistant's messages; the conversation is one
+  column. What an agent does reads as a log, a kind to each line.
+- Code in a reply has its language named and a button to copy it.
+- The four figures on the machines page and the dashboard tab are one box
+  divided by lines, not four cards.
+- The box you type in is one line high until it needs more, with its button
+  in the corner. The sidebar's rows are closer together.
+- A skip link, focus shown on everything that opens and closes, and
+  controls that ease only the properties they change.
+
+### The second round, the same day
+
+The owner looked at the result and said: "It looks too boxy, it's not giving
+a great user experience, from black, make it a bit gray, and add another
+orange tone, also the graph should look great it doesn't, remove the react
+flow logo, also make the lines connecting nodes glowing, to show where the
+data comes and goes. Use logos for the stack as well". That replaces the
+earlier "black only, colour only for status" rule; `CLAUDE.md` and
+[web/README.md](../web/README.md#design) now carry the new one. What was
+done:
+
+- **Colour.** The tokens in `web/src/app/globals.css`: a gray page
+  (`#171717`), a darker sidebar, lighter cards, a darker "stage" under the
+  project panel, and one orange for the main button, focus, and what is
+  live. Lines are faint. The terminal's palette and the server's error page
+  (`internal/portproxy/proxy.go`) were moved to match.
+- **Less boxy.** No line under the header or beside the sidebar; the panel
+  is a rounded surface set into the page; the user's messages, the answers
+  to a question and the suggestions on the start page are tinted, not
+  outlined; corners are larger (`--radius` 0.75rem).
+- **The graph.** Logos by technology (a new dependency, `simple-icons`,
+  which is CC0; only the logos imported are in the build), plain grey
+  lines with one small orange dot moving in the direction of requests
+  (glowing orange lines were tried first and the owner found them ugly),
+  CI's lines thin and dotted, the node an agent is on lit in orange, React Flow's mark
+  hidden. React Flow is MIT-licensed and hiding the mark is allowed; its
+  authors ask those who do so in a commercial product to subscribe.
+
+Checked the same way as the first round: the 28 browser checks, the build,
+and each screen looked at. Not checked beyond that list, as before; and the
+owner has not yet seen this round.
+
+Looked at and left alone: Vercel's list asks for title case on buttons and
+headings; this app uses sentence case throughout and keeps it. Issues 21
+and 22 above are what the same list found that was not done.
 
 ## How changes were tested
 
@@ -218,19 +321,31 @@ can be rebuilt, this time inside the repository:
   `apt-get download libnspr4 libnss3 libasound2t64`, unpacked with
   `dpkg -x` into a folder that is then put on `LD_LIBRARY_PATH`.
 
+**`tools/uicheck`** (2026-10-06, in the repository) is the smaller thing
+that looks at the frontend without any of the above. It writes sample chats,
+machines and agents for one test account straight into the database, takes
+pictures of any screen, drives the app and reports what held, and removes
+the account again. Its [README](../tools/uicheck/README.md) has the
+commands. It does not replace the stand-in: it shows what a chat looks
+like, not that the assistant can build one. While it was used the server
+was started with `LLM_BASE_URL` pointing at a port nothing listens on, so
+that nothing could reach the real model by accident.
+
 Do not point tests at the real model without asking the owner: it spends
 their credits. Asking the provider which models a key has
 (`GET $LLM_BASE_URL/models`) is free.
 
 ## What to do next
 
-1. Commit what is there.
+1. Look at the frontend pass in a browser and commit it, or say what to
+   change.
 2. Close the database off from machines (issue 1) and fix the sign-out on a
    database error (issue 4); both are small.
 3. Decide how machines belong to a project (issue 3) before starting a
    second chat that builds something.
-4. Put the end-to-end tooling into the repository, with the stand-in as a
-   Go module of its own so that it is never part of the product's build.
+4. Rebuild the stand-in for the model inside the repository, as a Go module
+   of its own so that it is never part of the product's build, next to
+   `tools/uicheck`.
 5. Then the limits (issue 5) and the rest, in the order above.
 
 Further out, and unchanged: a Fly.io provider (waiting on funds), platform-run

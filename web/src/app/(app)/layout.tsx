@@ -23,13 +23,25 @@ export default function AppLayout({ children }: { children: ReactNode }) {
           <AssistantAgents>
             <ShellProvider>
               <SidebarProvider>
+                {/* For someone moving by keyboard: straight to the page,
+                  past every chat in the sidebar. Unseen until it has focus. */}
+                <a
+                  href="#main"
+                  className="sr-only z-50 rounded-md border bg-background px-3 py-2 text-sm font-medium focus:not-sr-only focus:fixed focus:top-2 focus:left-2"
+                >
+                  Skip to the page
+                </a>
                 <AppSidebar />
                 {/* A fixed frame the height of the window: each page scrolls
                   inside it, and the editor and terminal can fill it exactly. */}
                 <SidebarInset className="h-svh overflow-hidden">
                   {/* A container, so a page lays itself out by the room it
                     actually has, whatever the window and the sidebar leave. */}
-                  <div className="@container/page flex min-h-0 min-w-0 flex-1 flex-col">
+                  <div
+                    id="main"
+                    tabIndex={-1}
+                    className="@container/page flex min-h-0 min-w-0 flex-1 flex-col outline-none"
+                  >
                     {children}
                   </div>
                 </SidebarInset>

@@ -165,9 +165,9 @@ export function NotReady({ part, icon }: { part: Part; icon: LucideIcon }) {
     return (
       <Blank icon={icon} title={`Nothing is answering on port ${node.port} yet`}>
         {working ? (
-          <span className="inline-flex items-center gap-2">
-            <Spinner className="size-3.5" />
-            <span>
+          <span className="inline-flex items-start justify-center gap-2 text-left">
+            <Spinner className="mt-0.5 size-3.5 shrink-0" />
+            <span className="min-w-0">
               <span className="font-medium text-foreground">{working.name}</span> is working on{" "}
               <span className="font-mono text-foreground">{machine.name}</span>
               {working.activity ? `: ${working.activity}` : ""}

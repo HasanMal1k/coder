@@ -142,6 +142,7 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
                   type="email"
                   autoComplete="email"
                   inputMode="email"
+                  spellCheck={false}
                   placeholder="you@example.com"
                   value={email}
                   aria-invalid={problems.email ? true : undefined}

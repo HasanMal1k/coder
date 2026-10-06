@@ -1,11 +1,6 @@
 "use client";
 
-import {
-  MessageSquareDashedIcon,
-  SparklesIcon,
-  TriangleAlertIcon,
-  WifiOffIcon,
-} from "lucide-react";
+import { MessageSquareDashedIcon, TriangleAlertIcon, WifiOffIcon } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -57,14 +52,7 @@ function NotSetUp() {
  * and a few things to try. `onStarted` is given the chat once its first
  * message has been accepted.
  */
-export function NewConversation({
-  compact,
-  onStarted,
-}: {
-  /** With the design beside it: less room, so less ceremony. */
-  compact: boolean;
-  onStarted: (chat: Chat) => void;
-}) {
+export function NewConversation({ onStarted }: { onStarted: (chat: Chat) => void }) {
   const { info, refreshChats } = useAssistant();
   const [draft, setDraft] = useState("");
   const [starting, setStarting] = useState(false);
@@ -92,27 +80,15 @@ export function NewConversation({
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
-      <div
-        className={cn(
-          "mx-auto flex min-h-full w-full max-w-3xl flex-col justify-center",
-          compact ? "gap-6 p-4" : "gap-8 p-4 sm:p-6 lg:p-8",
-        )}
-      >
+      {/* A little above the middle, where the eye rests on an empty page. */}
+      <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col justify-center gap-6 px-4 pt-8 pb-[12vh] sm:px-6">
         <div className="text-center">
-          <div
-            className={cn(
-              "mx-auto flex items-center justify-center rounded-lg border bg-card text-foreground",
-              compact ? "size-10" : "size-12",
-            )}
-          >
-            <SparklesIcon className={compact ? "size-5" : "size-6"} />
-          </div>
-          <h2 className={cn("mt-4 font-semibold tracking-tight", compact ? "text-lg" : "text-2xl")}>
+          <h2 className="text-3xl font-semibold tracking-tight @2xl/page:text-4xl">
             What should we build?
           </h2>
-          <p className="mx-auto mt-2 max-w-lg text-sm text-balance text-muted-foreground">
-            Say it in plain words. The assistant asks what it needs to know, creates the machines,
-            and writes and runs the code on them while you watch.
+          <p className="mx-auto mt-3 max-w-md text-sm text-pretty text-muted-foreground">
+            Describe it in plain words. The assistant designs it with you, then builds it on your
+            machines while you watch.
           </p>
         </div>
 
@@ -126,28 +102,34 @@ export function NewConversation({
           working={false}
           disabled={disabled}
           placeholder="A website with a backend and a frontend…"
+          roomy
+          note={
+            info?.model && (
+              <>
+                <span className="font-mono" translate="no">
+                  {info.model}
+                </span>
+                , with OpenCode writing the code
+              </>
+            )
+          }
         />
 
-        <div className="flex flex-col gap-2">
-          <p className="text-xs font-medium text-muted-foreground">Or start from one of these</p>
+        {/* Things to try, as quiet as the page: each fills the box when chosen. */}
+        <ul aria-label="Things to try" className="flex flex-wrap justify-center gap-2">
           {SUGGESTIONS.map((suggestion) => (
-            <button
-              key={suggestion}
-              type="button"
-              disabled={disabled}
-              onClick={() => setDraft(suggestion)}
-              className="rounded-lg border bg-card px-4 py-3 text-left text-sm transition-colors outline-none hover:border-foreground/40 hover:bg-muted focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50"
-            >
-              {suggestion}
-            </button>
+            <li key={suggestion}>
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() => setDraft(suggestion)}
+                className="rounded-lg bg-card px-3 py-2 text-left text-sm text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50"
+              >
+                {suggestion}
+              </button>
+            </li>
           ))}
-        </div>
-
-        {info?.model && (
-          <p className="text-center text-xs text-muted-foreground">
-            Uses {info.model}, with OpenCode doing the coding inside each machine.
-          </p>
-        )}
+        </ul>
       </div>
     </div>
   );
@@ -189,6 +171,21 @@ export function Conversation({
     const el = scroller.current;
     if (el && stick.current) el.scrollTo({ top: el.scrollHeight });
   }, [events.length, chat?.status, writing]);
+
+  // The same when the room changes and the words don't: the row of machines
+  // arriving above, a long answer being typed below, the window resized. Any
+  // of them would otherwise leave the last message under the edge.
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el) return;
+
+    const observer = new ResizeObserver(() => {
+      if (stick.current) el.scrollTo({ top: el.scrollHeight });
+    });
+    observer.observe(el);
+    if (el.firstElementChild) observer.observe(el.firstElementChild);
+    return () => observer.disconnect();
+  }, []);
 
   // The assistant creates, starts and stops machines. The design beside
   // this should show that as it happens, not at its next refresh.
@@ -248,11 +245,16 @@ export function Conversation({
   if (missing) {
     return (
       <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
-        <div className="flex size-10 items-center justify-center rounded-lg bg-muted">
-          <MessageSquareDashedIcon className="size-6" />
+        <div className="flex size-10 items-center justify-center rounded-lg border text-muted-foreground">
+          <MessageSquareDashedIcon className="size-5" />
         </div>
         <p className="font-medium">This chat doesn&apos;t exist</p>
-        <p className="text-sm text-muted-foreground">It may have been deleted.</p>
+        <p className="text-sm text-muted-foreground">
+          It may have been deleted.{" "}
+          <Link href="/" className="font-medium text-foreground underline underline-offset-4">
+            Start a new chat
+          </Link>
+        </p>
       </div>
     );
   }
@@ -270,12 +272,18 @@ export function Conversation({
           const el = event.currentTarget;
           stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_DISTANCE;
         }}
-        className="min-h-0 flex-1 overflow-y-auto"
+        // With no line under the header, what scrolls up fades out beneath it.
+        className="min-h-0 flex-1 overflow-y-auto [mask-image:linear-gradient(to_bottom,transparent,black_1rem)]"
       >
-        <div className={cn("mx-auto w-full max-w-3xl", compact ? "p-4" : "p-4 pb-8 sm:p-6 lg:p-8")}>
+        <div
+          className={cn(
+            "mx-auto w-full max-w-3xl pb-10",
+            compact ? "px-4 pt-4" : "px-4 pt-4 sm:px-6 sm:pt-6 lg:px-8 lg:pt-8",
+          )}
+        >
           {chat === null ? (
             <div className="space-y-6" aria-busy="true" aria-label="Loading the chat">
-              <Skeleton className="ml-auto h-10 w-2/3 rounded-xl" />
+              <Skeleton className="ml-auto h-10 w-2/3 rounded-lg" />
               <Skeleton className="h-20 w-5/6 rounded-lg" />
               <Skeleton className="h-10 w-1/2 rounded-lg" />
             </div>
@@ -292,11 +300,12 @@ export function Conversation({
         </div>
       </div>
 
-      <div className="shrink-0 border-t bg-background/80 backdrop-blur">
+      {/* No line above it: the conversation fades out behind where you type. */}
+      <div className="relative shrink-0 before:pointer-events-none before:absolute before:inset-x-0 before:bottom-full before:h-8 before:bg-linear-to-t before:from-background">
         <div
           className={cn(
-            "mx-auto flex w-full max-w-3xl flex-col gap-3",
-            compact ? "p-3" : "p-4 sm:px-6 lg:px-8",
+            "mx-auto flex w-full max-w-3xl flex-col gap-3 pb-[max(--spacing(4),env(safe-area-inset-bottom))]",
+            compact ? "px-3" : "px-4 sm:px-6 lg:px-8",
           )}
         >
           {offline && (
@@ -315,9 +324,7 @@ export function Conversation({
             working={working}
             disabled={chat === null || info?.enabled === false}
             placeholder={
-              status === "waiting"
-                ? "Answer, or say what to change…"
-                : "Ask for something to be built or changed…"
+              status === "waiting" ? "Answer, or say what to change…" : "Build or change something…"
             }
           />
         </div>
@@ -344,13 +351,13 @@ function ChatMachines({ items }: { items: ReturnType<typeof buildTranscript> }) 
   return (
     <ul
       aria-label="Machines in this chat"
-      className="flex shrink-0 flex-wrap items-center gap-1.5 border-b px-3 py-2"
+      className="flex shrink-0 flex-wrap items-center gap-1.5 px-3 pb-2 sm:px-4"
     >
       {machines.map((instance) => (
         <li key={instance.id}>
           <Link
             href={`/instances/${instance.id}`}
-            className="flex items-center gap-2 rounded-md border bg-card py-1 pr-3 pl-2.5 text-xs transition-colors outline-none hover:border-foreground/40 hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            className="flex items-center gap-2 rounded-md bg-card py-1 pr-3 pl-2.5 text-xs transition-colors outline-none hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50"
           >
             <StatusDot status={displayStatus(instance, pending[instance.id])} />
             <span className="font-mono">{instance.name}</span>

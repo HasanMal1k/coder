@@ -1,0 +1,14 @@
+{
+  "name": "uicheck",
+  "private": true,
+  "type": "module",
+  "description": "Looks at the frontend in a real browser, with sample data and without the model. Not part of the product.",
+  "scripts": {
+    "seed": "node seed.mjs",
+    "check": "node check.mjs",
+    "clean": "node clean.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.63.0"
+  }
+}

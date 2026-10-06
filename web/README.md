@@ -31,25 +31,73 @@ The interface is built from [shadcn/ui](https://ui.shadcn.com) components
 (on Radix), which live in `src/components/ui/` as ordinary source files; their
 corners and outlines have been edited to the shape described below. Icons are [Lucide](https://lucide.dev).
 
-- **Colour.** Black, in the manner of Vercel and v0, with white for what
-  asks to be pressed. Colour is kept for what it means: green for running,
-  amber for waiting, red for failure. Every colour is a token in
+- **Colour.** Dark gray, with one orange. The page is one gray, the sidebar
+  a darker one, a card a lighter one, and the project panel stands on the
+  darkest (`--stage`). Orange
+  (`--primary`) is for the one thing to press on a screen, for where focus
+  is, and for what is live or being worked on; a list of rows does not get
+  an orange button each. Green, amber and red say how something stands and
+  nothing else, and the amber is yellower than the orange so the two are
+  never confused. Every colour is a token in
   [globals.css](src/app/globals.css); components use the tokens
   (`bg-primary`, `text-muted-foreground`), never raw colours. To re-colour
   the app, change the tokens.
-- **Shape.** Small corners (`--radius` in the same file): 6px on buttons and
-  inputs, 8px on cards and menus, 12px on dialogs. Surfaces are told apart
-  by thin borders, not by tint or shadow, and a border brightens on what is
-  pointed at, focused or active. The sidebar is flat against the page, with
-  a line between them.
+- **Shape.** Soft corners (`--radius` in the same file): 10px on buttons
+  and inputs, 12px on cards, 16px on the largest surfaces; nothing is a
+  pill. Surfaces are told apart by their tone first; lines are faint (a
+  little white laid over whatever is beneath) and are left out where the
+  tone already says it: there is none under the header, none beside the
+  sidebar, and the project panel is a rounded surface set into the page
+  rather than a column behind a line.
+- **The diagram** ([canvas.tsx](src/components/architecture/canvas.tsx)) is
+  the part to show off. A component carries the logo of what it is made
+  with ([tech.tsx](src/components/architecture/tech.tsx), from Simple
+  Icons, matched loosely against the design's own words: "Go + SQLite" is
+  Go), in its brand's colour, lifted where that would be too dark to see. A
+  connection is a plain grey line; one that requests travel along has one small orange dot
+  moving from the component that asks to the one that answers; a
+  connection that carries none (CI fetching code) is a thin dotted line.
+  The component an agent is working on is outlined and lit in orange.
+  React Flow's own mark is left off (`hideAttribution`), which its licence
+  allows.
 - **Type.** Geist for text and Geist Mono for names of machines, commands
   and code.
 - **One theme.** There is no light theme and no switch. `<html>` carries the
   `dark` class so that the shadcn components' `dark:` styles apply. The
   terminal has its own palette to match, and the embedded editor is VS Code
-  with its own dark theme.
+  with its own dark theme. The page the server shows in place of an editor
+  or a preview that isn't up (`internal/portproxy/proxy.go`) uses the same
+  gray.
+- **The work, shown as what it is.** The conversation is one column with no
+  pictures beside it: the user's words in a box on the right, everything
+  else the assistant's. What an agent does is a log, with the kind of each
+  line (`run`, `write`, `edit`) in a column of its own and commands brighter
+  than files. Code the assistant writes comes in a block with its language
+  and a button to copy it. A table keeps its words whole and scrolls
+  sideways when the page is too narrow. Figures (machines running, memory
+  in use) are one box divided by lines ([stats.tsx](src/components/stats.tsx)),
+  not a card each.
+- **Motion** answers something the user did, or shows that something is
+  happening now (a spinner, the mark at the end of a message being written,
+  the dot travelling along each of the diagram's lines). Nothing animates in by
+  itself. Controls name the properties they ease,
+  never `transition-all`, and with "reduce motion" on, nothing eases and
+  nothing repeats.
+- **Keyboard and phone.** Everything that can be clicked shows where focus
+  is, in orange. The first Tab on any page offers a way past the sidebar. The box you
+  type in takes focus by itself only where there is a real keyboard, so
+  opening a chat on a phone doesn't raise the on-screen one. Deleting a
+  chat or a machine always asks first.
 
 To add a shadcn component: `npx shadcn@latest add <name>`.
+
+Two skills in [`.claude/skills/`](../.claude/skills/) are what this was last
+gone over with, and are worth using for any change to how it looks:
+`frontend-design` (Anthropic's: how to arrive at a design that isn't the
+default one) and `web-design-guidelines` (Vercel's: a list of about a
+hundred things an interface should get right). Where the two disagree with
+the rules above, the rules above win: buttons and headings here are in
+sentence case, for one, where Vercel's list asks for title case.
 
 ## Layout of the code
 
@@ -71,9 +119,13 @@ src/components/
   machines/     the list page, and the create and delete dialogs
   workspace/    a machine's page: editor frame, terminal, overview
   assistant/    the chat: its page, the conversation, the transcript, the
-                composer, Markdown
+                composer, Markdown, and the question asked before one is
+                deleted
+  stats.tsx     a few figures in one box, for the machines page and the
+                dashboard tab
   agents/       the list of agents, on the machines page and the dashboard tab
-  architecture/ the design drawn as a diagram
+  architecture/ the design drawn as a diagram, and the technology logos
+                on it
   pane/         the panel beside the chat and its four tabs: graph,
                 frontend, backend, dashboard
   auth/         sign-in form and the gate for signed-in pages
@@ -120,8 +172,10 @@ src/lib/
   being worked on or is waiting for an answer; each chat is one thing being
   built, at its own address (`/chats/<id>`), and `/` is the start of a new
   one. `ChatPage` ([chat-page.tsx](src/components/assistant/chat-page.tsx))
-  draws the other two: the conversation, and `SidePane` to its right. The
-  line between them can be dragged, or moved with the arrow keys. Whether
+  draws the other two: the conversation, and `SidePane` to its right. A
+  chat not yet started has nothing to put in the panel, so `/` has the page
+  to itself and the panel arrives with the chat. The line between them can
+  be dragged, or moved with the arrow keys. Whether
   the design is showing and how wide the chat is are kept by
   `AssistantProvider` and remembered per user in `localStorage`. Below
   1100 px there is no room for both, so the design slides over the chat

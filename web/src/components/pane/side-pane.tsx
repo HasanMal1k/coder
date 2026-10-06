@@ -37,7 +37,7 @@ const TABS: { id: PaneTab; label: string; icon: LucideIcon }[] = [
  * agents stand. On a small screen there is no room beside the chat, so it
  * slides over it instead.
  */
-export function SidePane({ chatId }: { chatId?: string }) {
+export function SidePane({ chatId }: { chatId: string }) {
   const { beside, designOpen, setDesignOpen } = useAssistant();
 
   if (!beside) {
@@ -46,13 +46,13 @@ export function SidePane({ chatId }: { chatId?: string }) {
         <SheetContent
           side="right"
           showCloseButton={false}
-          className="w-full gap-0 bg-background p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-2xl"
+          className="w-full gap-0 bg-stage p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-2xl"
         >
           <SheetTitle className="sr-only">Project</SheetTitle>
           <SheetDescription className="sr-only">
             What this chat is building: its design, its page, its API, and its machines.
           </SheetDescription>
-          <Pane chatId={chatId} />
+          <ChatViews key={chatId} chatId={chatId} />
         </SheetContent>
       </Sheet>
     );
@@ -61,19 +61,16 @@ export function SidePane({ chatId }: { chatId?: string }) {
   if (!designOpen) return null;
 
   return (
-    <aside aria-label="Project" className="flex min-w-0 flex-1 flex-col border-l bg-background">
-      <Pane chatId={chatId} />
+    <aside
+      aria-label="Project"
+      className="my-2 mr-2 flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border bg-stage"
+    >
+      <ChatViews key={chatId} chatId={chatId} />
     </aside>
   );
 }
 
-function Pane({ chatId }: { chatId?: string }) {
-  if (!chatId) return <Views architecture={null} onChanged={() => {}} />;
-
-  // Keyed by chat, so another chat's design starts from a clean slate.
-  return <ChatViews key={chatId} chatId={chatId} />;
-}
-
+/** Keyed by chat where it is used, so another chat's design starts from a clean slate. */
 function ChatViews({ chatId }: { chatId: string }) {
   // Looked up once, here, for every tab: each draws from the same design.
   const { architecture, refresh } = useArchitecture(chatId);
@@ -86,7 +83,7 @@ function Views({
   architecture,
   onChanged,
 }: {
-  chatId?: string;
+  chatId: string;
   architecture: Architecture | null | undefined;
   onChanged: () => void;
 }) {
@@ -115,7 +112,7 @@ function Views({
       onValueChange={(tab) => setPaneTab(tab as PaneTab)}
       className="@container/pane min-h-0 flex-1 gap-0"
     >
-      <header className="flex h-14 shrink-0 items-center gap-2 border-b pr-2 pl-2">
+      <header className="flex h-12 shrink-0 items-center gap-2 border-b pr-2 pl-2">
         <TabsList variant="line" className="h-full min-w-0 flex-1 justify-start gap-0 p-0">
           {TABS.map((tab) => (
             <TabsTrigger

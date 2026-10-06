@@ -44,6 +44,8 @@
   /* Beyond shadcn's set: what a machine's status is shown in. */
   --color-success: var(--success);
   --color-warning: var(--warning);
+  /* The darker ground under the project panel. */
+  --color-stage: var(--stage);
   /* The terminal's own surface, a step away from the page behind it. */
   --color-terminal: var(--terminal);
 
@@ -57,69 +59,125 @@
 }
 
 /*
- * The palette: black, with white for what asks to be pressed. Surfaces are
- * told apart by thin borders, not by tint or shadow. Colour is kept for what
- * it means (green for running, amber for waiting, red for failure). There is
- * one theme; <html> carries the "dark" class so that the base components'
- * dark: styles apply.
+ * The palette: dark gray, with one orange. Surfaces are told apart by how
+ * light they are first (the page, a card on it, something raised on that),
+ * and by a faint line second. Orange is for the one thing to press, for
+ * where focus is, and for what is live or moving. Green, amber and red say
+ * how something stands, and nothing else. There is one theme; <html>
+ * carries the "dark" class so that the base components' dark: styles apply.
  */
 :root {
   color-scheme: dark;
 
-  /* Small, crisp corners: 6px on controls, 8px on cards, 12px on dialogs. */
-  --radius: 0.5rem;
+  /* Soft corners: 10px on controls, 12px on cards, 16px on the largest surfaces. */
+  --radius: 0.75rem;
 
-  --background: #000000;
-  --foreground: #ededed;
-  --card: #0a0a0a;
-  --card-foreground: #ededed;
-  --popover: #0a0a0a;
-  --popover-foreground: #ededed;
-  --primary: #ededed;
-  --primary-foreground: #0a0a0a;
-  --secondary: #1f1f1f;
-  --secondary-foreground: #ededed;
-  --muted: #1a1a1a;
-  --muted-foreground: #a1a1a1;
-  --accent: #1f1f1f;
-  --accent-foreground: #ededed;
+  --background: #171717;
+  --foreground: #ececec;
+  --card: #1f1f1f;
+  --card-foreground: #ececec;
+  --popover: #222222;
+  --popover-foreground: #ececec;
+  --primary: oklch(0.74 0.17 52);
+  --primary-foreground: #1c1006;
+  --secondary: #2a2a2a;
+  --secondary-foreground: #ececec;
+  --muted: #272727;
+  --muted-foreground: #a3a3a3;
+  --accent: #2a2a2a;
+  --accent-foreground: #ececec;
   --destructive: oklch(0.704 0.191 22.216);
-  --border: #2e2e2e;
-  --input: #3d3d3d;
-  --ring: #a1a1a1;
-  --chart-1: #ededed;
+  /* Lines are a little light laid over whatever is beneath, so one value
+     reads as equally faint on the page, on a card and on the stage. */
+  --border: rgb(255 255 255 / 0.09);
+  --input: rgb(255 255 255 / 0.14);
+  --ring: oklch(0.74 0.17 52);
+  --chart-1: oklch(0.74 0.17 52);
   --chart-2: #3291ff;
   --chart-3: #8f8f8f;
   --chart-4: #5c5c5c;
   --chart-5: #3d3d3d;
-  --sidebar: #000000;
-  --sidebar-foreground: #ededed;
-  --sidebar-primary: #ededed;
-  --sidebar-primary-foreground: #0a0a0a;
-  --sidebar-accent: #1f1f1f;
-  --sidebar-accent-foreground: #ededed;
-  --sidebar-border: #2e2e2e;
-  --sidebar-ring: #a1a1a1;
+  --sidebar: #131313;
+  --sidebar-foreground: #ececec;
+  --sidebar-primary: oklch(0.74 0.17 52);
+  --sidebar-primary-foreground: #1c1006;
+  --sidebar-accent: #242424;
+  --sidebar-accent-foreground: #ececec;
+  --sidebar-border: rgb(255 255 255 / 0.07);
+  --sidebar-ring: oklch(0.74 0.17 52);
 
   --success: oklch(0.76 0.17 155);
-  --warning: oklch(0.82 0.15 80);
-  --terminal: #0a0a0a;
+  /* Yellower than the orange, so "waiting" is never taken for "press this". */
+  --warning: oklch(0.85 0.15 92);
+  --terminal: #131313;
+  /* The darker ground the project panel stands on. */
+  --stage: #111111;
 }
 
-/* The diagram draws its own lines and controls; these make them the theme's. */
+/* The diagram draws its own controls; these make them the theme's. */
 .react-flow {
   --xy-background-color: transparent;
-  --xy-background-pattern-color: var(--border);
-  --xy-edge-stroke: color-mix(in oklch, var(--foreground) 45%, transparent);
-  --xy-edge-label-background-color: var(--background);
-  --xy-edge-label-color: var(--muted-foreground);
+  --xy-background-pattern-color: rgb(255 255 255 / 0.1);
   --xy-controls-button-background-color: var(--card);
   --xy-controls-button-background-color-hover: var(--muted);
-  --xy-controls-button-color: var(--foreground);
+  --xy-controls-button-color: var(--muted-foreground);
   --xy-controls-button-color-hover: var(--foreground);
-  --xy-controls-button-border-color: var(--border);
+  --xy-controls-button-border-color: transparent;
   --xy-controls-box-shadow: 0 0 0 1px var(--border);
-  --xy-attribution-background-color: transparent;
+}
+
+.react-flow__controls {
+  overflow: hidden;
+  border-radius: var(--radius-md);
+}
+
+/*
+ * A connection in the diagram: a grey line, light enough to follow and no
+ * more. Which way requests go along it is hinted at by one small orange
+ * dot travelling from the component that asks to the one that answers.
+ */
+.flow-line {
+  fill: none;
+  stroke: rgb(255 255 255 / 0.32);
+  stroke-width: 1.5;
+}
+
+/* The dot. The path it is drawn on is measured as 1 from end to end
+   (pathLength), so "0 1" is a single dash of no length, which a round cap
+   turns into a dot, and moving the dashes by -1 carries it the whole way,
+   at one speed. It fades in as it leaves and out as it arrives, so the
+   return to the start is never seen as a jump. */
+.flow-dot {
+  fill: none;
+  stroke: var(--primary);
+  stroke-width: 3.5;
+  stroke-linecap: round;
+  stroke-dasharray: 0 1;
+  animation: flow linear infinite;
+}
+
+/* A line that carries no requests (CI fetching the code it builds): there,
+   and out of the way. */
+.flow-quiet {
+  fill: none;
+  stroke: rgb(255 255 255 / 0.2);
+  stroke-width: 1.25;
+  stroke-dasharray: 2 5;
+}
+
+@keyframes flow {
+  from {
+    stroke-dashoffset: 0;
+    opacity: 0;
+  }
+  12%,
+  88% {
+    opacity: 1;
+  }
+  to {
+    stroke-dashoffset: -1;
+    opacity: 0;
+  }
 }
 
 @layer base {
@@ -131,10 +189,23 @@
 
   html {
     @apply font-sans;
+    /* A tap is a tap: no wait to see whether it becomes a double-tap zoom,
+       and no grey flash over what was touched (each control shows its own). */
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
   }
 
   body {
     @apply bg-background text-foreground;
+  }
+
+  /* A heading that runs to two lines breaks into two of like length, not
+     one long and one word. */
+  h1,
+  h2,
+  h3,
+  h4 {
+    text-wrap: balance;
   }
 
   ::selection {
@@ -142,11 +213,34 @@
   }
 }
 
+/* The mark at the end of a message the assistant is still writing. */
+@keyframes caret {
+  50% {
+    opacity: 0;
+  }
+}
+
+@utility caret-after {
+  &::after {
+    content: "";
+    display: inline-block;
+    width: 0.5em;
+    height: 1em;
+    margin-left: 0.15em;
+    vertical-align: text-bottom;
+    background: var(--foreground);
+    animation: caret 1s steps(1) infinite;
+  }
+}
+
+/* For those who ask for less motion: nothing eases, and nothing that
+   repeats (a spinner, a pulse, the caret) keeps going. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
 }

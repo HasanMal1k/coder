@@ -11,13 +11,14 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import type { Chat } from "@/lib/api";
 import { useAgents, useNow } from "@/lib/agents";
 import { initials } from "@/lib/format";
 import { clearSession } from "@/lib/session";
 import { chatHref, useAssistant } from "../assistant/assistant-provider";
 import { removeChat } from "../assistant/conversation";
+import { DeleteChatDialog } from "../assistant/delete-chat-dialog";
 import { useUser } from "../auth/require-auth";
 import { BrandMark } from "../brand";
 import { Avatar, AvatarFallback } from "../ui/avatar";
@@ -87,6 +88,9 @@ export function AppSidebar() {
     () => new Set((agents ?? []).filter((a) => a.status === "working").map((a) => a.chat_id)),
     [agents],
   );
+
+  // The chat the user has asked to delete and not yet confirmed.
+  const [deleting, setDeleting] = useState<Chat | null>(null);
 
   const name = user.display_name || user.email;
   // On a phone the sidebar is a drawer over the page; picking something
@@ -169,7 +173,7 @@ export function AppSidebar() {
                       current={chat.id === chatId}
                       working={chat.status === "running" || busy.has(chat.id)}
                       onNavigate={closeDrawer}
-                      onDelete={() => remove(chat)}
+                      onDelete={() => setDeleting(chat)}
                     />
                   ))}
                 </SidebarMenu>
@@ -238,6 +242,8 @@ export function AppSidebar() {
       </SidebarFooter>
 
       <SidebarRail />
+
+      <DeleteChatDialog chat={deleting} onConfirm={remove} onClose={() => setDeleting(null)} />
     </Sidebar>
   );
 }
@@ -291,7 +297,7 @@ function ChatLink({
         <DropdownMenuContent side="right" align="start" className="min-w-40">
           <DropdownMenuItem variant="destructive" onSelect={onDelete}>
             <Trash2Icon />
-            Delete chat
+            Delete chat…
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

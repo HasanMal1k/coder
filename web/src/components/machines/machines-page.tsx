@@ -3,8 +3,6 @@
 import {
   ArrowRightIcon,
   CopyIcon,
-  CpuIcon,
-  MemoryStickIcon,
   MonitorIcon,
   MoreHorizontalIcon,
   PlayIcon,
@@ -14,10 +12,9 @@ import {
   SquareIcon,
   Trash2Icon,
   TriangleAlertIcon,
-  ZapIcon,
 } from "lucide-react";
 import Link from "next/link";
-import { useMemo, useState, type ComponentType } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import type { Instance } from "@/lib/api";
 import {
@@ -34,11 +31,12 @@ import { cn } from "@/lib/utils";
 import { AgentsSection } from "../agents/agents-section";
 import { PageHeader } from "../shell/page-header";
 import { useShell } from "../shell/shell-provider";
+import { Stat, Stats } from "../stats";
 import { StatusBadge } from "../status";
 import { Alert, AlertAction, AlertDescription } from "../ui/alert";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
-import { Card, CardContent } from "../ui/card";
+import { Card } from "../ui/card";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -152,35 +150,27 @@ export function MachinesPage() {
             </Alert>
           )}
 
-          {/* Four tiles of zeros tell a new user nothing. */}
+          {/* Four zeros tell a new user nothing. */}
           {instances?.length !== 0 && (
-            <dl className="grid grid-cols-2 gap-3 @3xl/page:grid-cols-4">
-              <Tile
-                icon={MonitorIcon}
-                label="Machines"
-                value={loading ? null : String(counts.all)}
-                detail="in your account"
-              />
-              <Tile
-                icon={ZapIcon}
+            <Stats className="@3xl/page:grid-cols-4">
+              <Stat label="Machines" value={loading ? null : String(counts.all)} />
+              <Stat
                 label="Running"
                 value={loading ? null : String(counts.running)}
-                detail={`${counts.stopped} not running`}
+                detail={`of ${counts.all}`}
                 tone={counts.running > 0 ? "text-success" : undefined}
               />
-              <Tile
-                icon={CpuIcon}
+              <Stat
                 label="vCPUs in use"
                 value={loading ? null : String(counts.cpusRunning)}
-                detail={`of ${counts.cpusTotal} allocated`}
+                detail={`of ${counts.cpusTotal}`}
               />
-              <Tile
-                icon={MemoryStickIcon}
+              <Stat
                 label="Memory in use"
                 value={loading ? null : formatMemory(counts.memoryRunning)}
-                detail={`of ${formatMemory(counts.memoryTotal)} allocated`}
+                detail={`of ${formatMemory(counts.memoryTotal)}`}
               />
-            </dl>
+            </Stats>
           )}
 
           <AgentsSection />
@@ -314,36 +304,6 @@ export function MachinesPage() {
   );
 }
 
-function Tile({
-  icon: Icon,
-  label,
-  value,
-  detail,
-  tone,
-}: {
-  icon: ComponentType<{ className?: string }>;
-  label: string;
-  /** null while loading. */
-  value: string | null;
-  detail: string;
-  tone?: string;
-}) {
-  return (
-    <Card size="sm">
-      <CardContent>
-        <dt className="flex items-center justify-between gap-2 text-sm text-muted-foreground">
-          {label}
-          <Icon className="size-4 opacity-70" />
-        </dt>
-        <dd className={cn("mt-2 text-3xl font-semibold tracking-tight tabular-nums", tone)}>
-          {value ?? <Skeleton className="my-1.5 h-7 w-12" />}
-        </dd>
-        <dd className="mt-0.5 text-xs text-muted-foreground">{value === null ? " " : detail}</dd>
-      </CardContent>
-    </Card>
-  );
-}
-
 function MachineRow({ instance, pending }: { instance: Instance; pending?: PendingAction }) {
   const { start, stop } = useInstances();
   const { confirmDelete } = useShell();
@@ -403,7 +363,7 @@ function MachineRow({ instance, pending }: { instance: Instance; pending?: Pendi
           {/* On a phone these give way to the name; the same actions are in
               the row's menu, and the name itself opens the machine. */}
           {status === "running" && (
-            <Button asChild size="sm" className="@max-lg/page:hidden">
+            <Button asChild variant="secondary" size="sm" className="@max-lg/page:hidden">
               <Link href={href}>Open</Link>
             </Button>
           )}

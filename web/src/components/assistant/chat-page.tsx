@@ -23,7 +23,8 @@ const KEY_STEP = 24;
 
 /**
  * The app's main page: a chat, and beside it a panel showing what that chat
- * is building. Without a chat ID it is the start of a new one.
+ * is building. Without a chat ID it is the start of a new one, which has the
+ * page to itself: the panel arrives with the chat.
  */
 export function ChatPage({ chatId }: { chatId?: string }) {
   const router = useRouter();
@@ -37,8 +38,9 @@ export function ChatPage({ chatId }: { chatId?: string }) {
   useTitle(title ?? "Chat");
 
   // With the panel beside it, the chat is a column of a width the user
-  // chooses. Otherwise it has the page.
-  const split = beside && designOpen;
+  // chooses. Otherwise it has the page. A chat not yet started has nothing
+  // to show in the panel, so there it always has the page.
+  const split = beside && designOpen && chatId !== undefined;
 
   return (
     <div className="flex min-h-0 flex-1">
@@ -53,16 +55,18 @@ export function ChatPage({ chatId }: { chatId?: string }) {
       >
         <PageHeader
           actions={
-            <Button
-              variant={designOpen ? "secondary" : "ghost"}
-              size="sm"
-              aria-label="Panel"
-              aria-pressed={designOpen}
-              onClick={() => setDesignOpen(!designOpen)}
-            >
-              <PanelRightIcon />
-              <span className="hidden @2xl/page:inline">Panel</span>
-            </Button>
+            chatId && (
+              <Button
+                variant={designOpen ? "secondary" : "ghost"}
+                size="sm"
+                aria-label="Panel"
+                aria-pressed={designOpen}
+                onClick={() => setDesignOpen(!designOpen)}
+              >
+                <PanelRightIcon />
+                <span className="hidden @2xl/page:inline">Panel</span>
+              </Button>
+            )
           }
         >
           <h1 className="truncate text-sm font-medium">{title}</h1>
@@ -72,16 +76,13 @@ export function ChatPage({ chatId }: { chatId?: string }) {
           // Keyed by chat, so opening another one starts from a clean slate.
           <Conversation key={chatId} id={chatId} compact={split} onLoaded={setChat} />
         ) : (
-          <NewConversation
-            compact={split}
-            onStarted={(started) => router.push(chatHref(started.id))}
-          />
+          <NewConversation onStarted={(started) => router.push(chatHref(started.id))} />
         )}
 
         {split && <Divider />}
       </div>
 
-      <SidePane chatId={chatId} />
+      {chatId && <SidePane chatId={chatId} />}
     </div>
   );
 }

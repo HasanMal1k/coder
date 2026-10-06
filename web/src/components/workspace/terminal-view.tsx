@@ -24,10 +24,10 @@ const FONT_FAMILY =
 // xterm draws its own surface and needs concrete colours. The background
 // matches the --terminal token in globals.css.
 const THEME = {
-  background: "#0a0a0a",
-  foreground: "#ededed",
-  cursor: "#ededed",
-  cursorAccent: "#0a0a0a",
+  background: "#131313",
+  foreground: "#ececec",
+  cursor: "#ececec",
+  cursorAccent: "#131313",
   selectionBackground: "#ffffff40",
   black: "#1a1a1a",
   red: "#f7768e",

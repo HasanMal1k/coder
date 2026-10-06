@@ -525,8 +525,8 @@ function Operation({
                     <details className="group/response">
                       <summary
                         className={cn(
-                          "flex list-none items-baseline gap-2 outline-none [&::-webkit-details-marker]:hidden",
-                          response.example && "cursor-pointer focus-visible:text-foreground",
+                          "flex list-none items-baseline gap-2 rounded-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 [&::-webkit-details-marker]:hidden",
+                          response.example && "cursor-pointer",
                         )}
                       >
                         <span

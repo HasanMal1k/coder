@@ -60,13 +60,22 @@ These are the owner's, given over several sessions.
 - **Test accounts** are named `tmpcheck-<something>@example.com` and are
   removed afterwards with their machines, volumes and network
   ([docs/STATUS.md](docs/STATUS.md#how-changes-were-tested) says how).
+  `tools/uicheck` makes and removes one for looking at the frontend.
 - **Frontend formatting** is Prettier at 100 columns. No config file says
   so; always pass `--print-width 100`.
-- **How it looks.** Black only, in the manner of Vercel and v0: small
-  corners (`rounded-md`, `rounded-lg`; no pills), thin borders in place of
-  shadows and tinted fills, colour only for status (green, amber, red).
-  Colours are tokens in `web/src/app/globals.css`. There is no light theme;
-  do not add one.
+- **How it looks.** Dark gray with one orange (the owner's words on
+  2026-10-06, of the black, outlined version before it: "too boxy ... from
+  black, make it a bit gray, and add another orange tone ... make it
+  clean"). Surfaces are told apart by tone first and a faint line second;
+  corners are soft but never pills; orange is for the one thing to press,
+  for focus, and for what is live; green, amber and red are for status
+  only. The architecture graph is the showpiece: technology logos on its
+  nodes, plain grey lines with one small dot hinting which way requests go, no library
+  mark. Colours are tokens in `web/src/app/globals.css`. There is no light
+  theme; do not add one. For any change to the interface, use the two skills in
+  `.claude/skills/` (`frontend-design` to design it, `web-design-guidelines`
+  to check it); where they disagree with this rule, this rule wins.
+  [web/README.md](web/README.md#design) has the rest.
 - **Keep the documents true.** A change to behaviour updates the document
   that describes it, in the same piece of work.
 - **Explain plainly**, and do not race ahead of what was asked.

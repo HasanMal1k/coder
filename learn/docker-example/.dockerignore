@@ -1,0 +1,10 @@
+# Everything in this folder is sent to Docker before a build starts, except
+# what is listed here. Leaving things out makes builds faster, keeps secrets
+# out of images, and stops an unrelated edit (to the README, say) from
+# throwing away the cached layers after "COPY . .".
+.git
+.env
+*.md
+Dockerfile
+docker-compose.yml
+migrations

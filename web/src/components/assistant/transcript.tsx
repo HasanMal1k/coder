@@ -8,7 +8,6 @@ import {
   MessageCircleQuestionIcon,
   MessagesSquareIcon,
   NetworkIcon,
-  SparklesIcon,
   SquareTerminalIcon,
   TriangleAlertIcon,
   XIcon,
@@ -76,7 +75,7 @@ export function Transcript({
   status: ChatStatus;
   /** The message the assistant is writing right now, as far as it has got. */
   draft: string;
-  /** With the design beside it: tighter, with no avatar column. */
+  /** With the design beside it: less room, so less space between things. */
   compact: boolean;
   /** Answers the question the assistant is waiting on. */
   onAnswer: (answer: string) => void;
@@ -99,7 +98,7 @@ export function Transcript({
           case "user":
             return (
               <div key={item.seq} className="flex justify-end">
-                <div className="max-w-[85%] rounded-lg border bg-muted px-4 py-2.5 text-sm leading-relaxed wrap-anywhere whitespace-pre-wrap">
+                <div className="max-w-[85%] rounded-xl bg-muted px-4 py-2.5 text-sm leading-relaxed wrap-anywhere whitespace-pre-wrap">
                   {item.text}
                 </div>
               </div>
@@ -107,7 +106,7 @@ export function Transcript({
 
           case "assistant":
             return (
-              <AssistantTurn key={item.seq} compact={compact}>
+              <AssistantTurn key={item.seq}>
                 {item.text && <Markdown>{item.text}</Markdown>}
                 {item.steps.length > 0 && (
                   <div className="flex flex-col gap-2">
@@ -127,20 +126,14 @@ export function Transcript({
             );
 
           case "news":
-            return <NewsLine key={item.seq} news={item.news} compact={compact} />;
+            return <NewsLine key={item.seq} news={item.news} />;
 
           case "exchange":
-            return <ExchangeView key={item.seq} exchange={item.exchange} compact={compact} />;
+            return <ExchangeView key={item.seq} exchange={item.exchange} />;
 
           case "error":
             return item.stopped ? (
-              <p
-                key={item.seq}
-                className={cn(
-                  "flex items-center gap-2 text-sm text-muted-foreground",
-                  !compact && "pl-11",
-                )}
-              >
+              <p key={item.seq} className="flex items-center gap-2 text-sm text-muted-foreground">
                 <CircleSlashIcon className="size-4" />
                 You stopped the assistant.
               </p>
@@ -148,10 +141,7 @@ export function Transcript({
               <div
                 key={item.seq}
                 role="alert"
-                className={cn(
-                  "flex items-start gap-2.5 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive",
-                  !compact && "ml-11",
-                )}
+                className="flex items-start gap-2.5 rounded-lg border border-destructive/40 px-4 py-3 text-sm text-destructive"
               >
                 <TriangleAlertIcon className="mt-0.5 size-4 shrink-0" />
                 <p className="min-w-0 wrap-anywhere">{item.message}</p>
@@ -161,19 +151,20 @@ export function Transcript({
       })}
 
       {draft && (
-        <AssistantTurn compact={compact}>
-          {/* Shown as it is written; replaced by the finished message. */}
-          <div aria-live="off" data-draft>
+        <AssistantTurn>
+          {/* Shown as it is written, with a mark where the next word will
+              go; replaced by the finished message. */}
+          <div aria-live="off" data-draft className="[&>div>p:last-child]:caret-after">
             <Markdown>{draft}</Markdown>
           </div>
         </AssistantTurn>
       )}
 
       {thinking && (
-        <AssistantTurn compact={compact}>
+        <AssistantTurn>
           <p className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
             <Spinner />
-            Thinking
+            Thinking…
           </p>
         </AssistantTurn>
       )}
@@ -181,21 +172,13 @@ export function Transcript({
   );
 }
 
-function AssistantTurn({ compact, children }: { compact: boolean; children: ReactNode }) {
-  if (compact) return <div className="flex min-w-0 flex-col gap-3">{children}</div>;
-
-  return (
-    <div className="flex gap-3">
-      <div
-        aria-hidden
-        className="flex size-8 shrink-0 items-center justify-center rounded-md border bg-card text-foreground"
-      >
-        <SparklesIcon className="size-4" />
-      </div>
-      {/* Lined up with the middle of the avatar when it is one line. */}
-      <div className="flex min-w-0 flex-1 flex-col gap-3 pt-1.5">{children}</div>
-    </div>
-  );
+/**
+ * What the assistant said and did in one go. It has no picture beside it:
+ * the user's words sit to the right in a box, and everything else is the
+ * assistant's.
+ */
+function AssistantTurn({ children }: { children: ReactNode }) {
+  return <div className="flex min-w-0 flex-col gap-3">{children}</div>;
 }
 
 function StepView({
@@ -416,8 +399,9 @@ function Question({
   return (
     <div
       className={cn(
-        "rounded-lg border bg-card p-4",
-        open && "border-foreground/50 ring-3 ring-foreground/10",
+        "rounded-xl border bg-card p-4",
+        // Waiting on the user: outlined in the accent, the one thing to act on.
+        open && "border-primary/60",
       )}
     >
       <p className="flex items-start gap-2.5 text-sm font-medium">
@@ -433,7 +417,7 @@ function Question({
               type="button"
               disabled={!open}
               onClick={() => onAnswer(option.label)}
-              className="group/option rounded-md border bg-background px-3.5 py-2.5 text-left text-sm transition-colors outline-none hover:border-foreground/50 hover:bg-accent focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-60"
+              className="group/option rounded-lg bg-muted/60 px-3.5 py-2.5 text-left text-sm transition-colors outline-none hover:bg-accent focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-60"
             >
               <span className="flex items-center gap-2">
                 <span className="min-w-0 font-medium wrap-anywhere">{option.label}</span>
@@ -493,7 +477,7 @@ function CodingTask({ step, outcome, machine }: { step: Step; outcome: Outcome; 
   const outcomeText = background ? step.news?.content : step.result?.content;
 
   return (
-    <div className="overflow-hidden rounded-lg border bg-card">
+    <div className="overflow-hidden rounded-xl border bg-card">
       <div className="flex items-center gap-2.5 px-4 py-3 text-sm">
         <SquareTerminalIcon className="size-4 shrink-0 text-muted-foreground" />
         <p className="min-w-0 flex-1 truncate">
@@ -519,18 +503,15 @@ function CodingTask({ step, outcome, machine }: { step: Step; outcome: Outcome; 
         <ol
           ref={log}
           aria-label={`What the coding agent did on ${machine}`}
-          className="max-h-40 overflow-y-auto border-t bg-muted/30 px-4 py-2.5 font-mono text-xs leading-relaxed text-muted-foreground"
+          className="max-h-44 overflow-y-auto overscroll-contain bg-black/25 px-4 py-2.5 font-mono text-xs leading-relaxed"
+          translate="no"
         >
           {lines.map((line, index) => (
-            <li
+            <LogLine
               key={index}
-              className={cn(
-                "truncate",
-                outcome === "working" && index === lines.length - 1 && "text-foreground",
-              )}
-            >
-              {line}
-            </li>
+              line={line}
+              current={outcome === "working" && index === lines.length - 1}
+            />
           ))}
         </ol>
       )}
@@ -551,6 +532,51 @@ function CodingTask({ step, outcome, machine }: { step: Step; outcome: Outcome; 
         </Disclosure>
       )}
     </div>
+  );
+}
+
+/**
+ * How each kind of line in an agent's log begins, as the server writes it,
+ * and the word it is filed under here. A command the agent ran is the thing
+ * most worth finding again, so those are the bright ones.
+ */
+const LOG_KINDS: { begins: string; kind: string; bright?: boolean }[] = [
+  { begins: "Running ", kind: "run", bright: true },
+  { begins: "Writing ", kind: "write" },
+  { begins: "Editing ", kind: "edit" },
+  { begins: "Reading ", kind: "read" },
+  { begins: "Searching for ", kind: "search" },
+  { begins: "Listing ", kind: "list" },
+  { begins: "Fetching ", kind: "fetch" },
+  { begins: "Registering service ", kind: "service", bright: true },
+  { begins: "Asking ", kind: "ask" },
+];
+
+/**
+ * One thing an agent did, as a line of a log: what kind of thing in a
+ * column of its own, so the eye can run down the commands or the files.
+ */
+function LogLine({ line, current }: { line: string; current: boolean }) {
+  const kind = LOG_KINDS.find((k) => line.startsWith(k.begins));
+  const rest = kind ? line.slice(kind.begins.length) : line;
+
+  return (
+    <li className="flex gap-2" title={line}>
+      <span aria-hidden className="w-[7ch] shrink-0 text-muted-foreground/60 select-none">
+        {kind?.kind ?? "·"}
+      </span>
+      <span
+        className={cn(
+          "min-w-0 truncate",
+          current || kind?.bright ? "text-foreground" : "text-muted-foreground",
+          current && "caret-after",
+        )}
+      >
+        {/* Read aloud as it was written, not as the column heading. */}
+        {kind && <span className="sr-only">{kind.begins}</span>}
+        {rest}
+      </span>
+    </li>
   );
 }
 
@@ -604,8 +630,9 @@ function Proposal({
   return (
     <div
       className={cn(
-        "rounded-lg border bg-card p-4",
-        open && "border-foreground/50 ring-3 ring-foreground/10",
+        "rounded-xl border bg-card p-4",
+        // Waiting on the user: outlined in the accent, the one thing to act on.
+        open && "border-primary/60",
       )}
     >
       <p className="flex items-start gap-2.5 text-sm font-medium">
@@ -634,7 +661,7 @@ function Proposal({
       {/* The case for it, open while it is being decided on. */}
       {reasons.length > 0 && (
         <details className="group mt-3 border-t pt-3" open={open}>
-          <summary className="flex cursor-pointer list-none items-center gap-1.5 text-sm font-medium outline-none select-none focus-visible:text-primary [&::-webkit-details-marker]:hidden">
+          <summary className="flex cursor-pointer list-none items-center gap-1.5 rounded-sm text-sm font-medium outline-none select-none focus-visible:ring-[3px] focus-visible:ring-ring/50 [&::-webkit-details-marker]:hidden">
             <ChevronRightIcon className="size-4 transition-transform group-open:rotate-90" />
             Why this design
           </summary>
@@ -689,10 +716,10 @@ function Proposal({
 }
 
 /** One agent asking another something, and what it was told. */
-function ExchangeView({ exchange, compact }: { exchange: AgentExchange; compact: boolean }) {
+function ExchangeView({ exchange }: { exchange: AgentExchange }) {
   return (
-    <details className={cn("group rounded-lg border bg-card", !compact && "ml-11")}>
-      <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-2.5 text-sm outline-none select-none [&::-webkit-details-marker]:hidden">
+    <details className="group rounded-lg border bg-card">
+      <summary className="flex cursor-pointer list-none items-center gap-2 rounded-lg px-4 py-2.5 text-sm outline-none select-none focus-visible:ring-[3px] focus-visible:ring-ring/50 [&::-webkit-details-marker]:hidden">
         <MessagesSquareIcon className="size-4 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate">
           <span className="font-medium">{exchange.from.agent}</span>
@@ -731,14 +758,11 @@ function ExchangeView({ exchange, compact }: { exchange: AgentExchange; compact:
 }
 
 /** Where in the conversation a background agent finished. */
-function NewsLine({ news, compact }: { news: AgentNews; compact: boolean }) {
+function NewsLine({ news }: { news: AgentNews }) {
   const how = news.stopped ? "was stopped" : news.failed ? "failed" : "finished";
 
   return (
-    <p
-      role="status"
-      className={cn("flex items-center gap-2 text-xs text-muted-foreground", !compact && "pl-11")}
-    >
+    <p role="status" className="flex items-center gap-2 text-xs text-muted-foreground">
       <span
         aria-hidden
         className={cn(
@@ -769,7 +793,7 @@ function Disclosure({
 }) {
   return (
     <details className={cn("group", className)} open={defaultOpen}>
-      <summary className="flex cursor-pointer list-none items-center gap-1.5 px-4 py-2 text-xs font-medium text-muted-foreground outline-none select-none hover:text-foreground focus-visible:text-foreground [&::-webkit-details-marker]:hidden">
+      <summary className="flex cursor-pointer list-none items-center gap-1.5 px-4 py-2 text-xs font-medium text-muted-foreground outline-none select-none hover:text-foreground focus-visible:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset [&::-webkit-details-marker]:hidden">
         <ChevronRightIcon className="size-3.5 transition-transform group-open:rotate-90" />
         {label}
       </summary>

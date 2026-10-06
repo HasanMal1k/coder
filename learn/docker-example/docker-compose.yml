@@ -1,0 +1,82 @@
+# Three containers that together are one small application: a database, a
+# job that prepares it, and the program. Compose is `docker run` written down:
+# everything here could be typed by hand (the README does so first), and this
+# file is what saves typing it again.
+#
+#   docker compose up --build -d --wait   build, start, and return once healthy
+#   docker compose ps                     what is running
+#   docker compose logs -f app            follow the program's output
+#   docker compose down                   stop and remove the containers; data stays
+#   docker compose down -v                the same, and delete the data too
+
+# The project's name. Everything Compose creates carries it: the containers
+# hits-db-1 and hits-app-1, the network hits_default, the volume hits_dbdata.
+# Without this line it would be the folder's name.
+name: hits
+
+services:
+  # A service's name is also its hostname on the project's network. That is
+  # why the others can say "db" where they would otherwise need an address.
+  db:
+    # "image" means use one that already exists, pulling it if need be.
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: hits
+      # ${NAME:-default} is filled in by Compose from your shell, or from a
+      # file named .env beside this one, with a fallback after ":-".
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hits}
+      POSTGRES_DB: hits
+    volumes:
+      # A named volume: storage Docker looks after, which outlives the
+      # container. Remove the container and the data is still there.
+      - dbdata:/var/lib/postgresql/data
+    healthcheck:
+      # The Postgres image comes with no health check, so it is given one
+      # here. "Running" only means the process started; "healthy" means it
+      # is accepting connections.
+      test: ["CMD-SHELL", "pg_isready -U hits -d hits"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    # No "ports". Only the other containers use the database, and they reach
+    # it over the project's network. A port that is not published cannot be
+    # reached from outside at all, which is the safest setting there is.
+
+  # Runs once, creates the tables, and exits. It is a container like the
+  # others; it just isn't meant to stay up.
+  migrate:
+    image: migrate/migrate:v4.18.3
+    command:
+      - -path=/migrations
+      - -database=postgres://hits:${POSTGRES_PASSWORD:-hits}@db:5432/hits?sslmode=disable
+      - up
+    volumes:
+      # A bind mount: a folder from this computer, shown inside the
+      # container. ":ro" makes it read-only there.
+      - ./migrations:/migrations:ro
+    depends_on:
+      db:
+        # Plain "depends_on" only waits for the container to start. This
+        # waits for its health check to pass.
+        condition: service_healthy
+
+  app:
+    # "build" means make the image from the Dockerfile in this folder.
+    build: .
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://hits:${POSTGRES_PASSWORD:-hits}@db:5432/hits?sslmode=disable
+    ports:
+      # host:container. The program listens on 8080 inside its container;
+      # this makes it reachable as port 8090 on this computer. Starting with
+      # 127.0.0.1 keeps it to this computer; without that, Docker publishes
+      # on every network interface, to anything that can reach the machine.
+      - "127.0.0.1:8090:8080"
+    depends_on:
+      migrate:
+        # Don't start until the tables exist.
+        condition: service_completed_successfully
+
+volumes:
+  dbdata:

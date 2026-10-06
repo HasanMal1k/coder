@@ -9,6 +9,7 @@ import { formatMemory, formatSpecs, formatStack } from "@/lib/format";
 import { displayStatus, isBusy, useInstances } from "@/lib/instances";
 import { cn } from "@/lib/utils";
 import { AgentList } from "../agents/agents-section";
+import { Stat, Stats } from "../stats";
 import { StatusBadge, StatusDot } from "../status";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -88,25 +89,25 @@ export function DashboardTab({
   return (
     <div className="@container/dash min-h-0 flex-1 overflow-y-auto">
       <div className="flex flex-col gap-6 p-4">
-        <dl className="grid grid-cols-2 gap-2 @lg/dash:grid-cols-4">
-          <Tile label="Machines running" value={`${running.length}`} detail={`of ${mine.length}`} />
-          <Tile
+        <Stats className="@lg/dash:grid-cols-4">
+          <Stat label="Machines running" value={`${running.length}`} detail={`of ${mine.length}`} />
+          <Stat
             label="Agents working"
             value={`${working}`}
             detail={`of ${ours.length}`}
-            live={working > 0}
+            tone={working > 0 ? "text-success" : undefined}
           />
-          <Tile
+          <Stat
             label="vCPUs in use"
             value={`${running.reduce((sum, i) => sum + i.cpus, 0)}`}
             detail={`of ${mine.reduce((sum, i) => sum + i.cpus, 0)}`}
           />
-          <Tile
+          <Stat
             label="Memory in use"
             value={formatMemory(running.reduce((sum, i) => sum + i.memory_mb, 0))}
             detail={`of ${formatMemory(mine.reduce((sum, i) => sum + i.memory_mb, 0))}`}
           />
-        </dl>
+        </Stats>
 
         <section aria-labelledby="dash-machines" className="flex flex-col gap-2.5">
           <h3 id="dash-machines" className="text-sm font-medium">
@@ -182,36 +183,6 @@ export function DashboardTab({
           , including creating and deleting machines by hand.
         </p>
       </div>
-    </div>
-  );
-}
-
-function Tile({
-  label,
-  value,
-  detail,
-  live,
-}: {
-  label: string;
-  value: string;
-  detail: string;
-  /** Something is happening right now. */
-  live?: boolean;
-}) {
-  return (
-    <div className="rounded-md border bg-card px-3 py-2.5">
-      <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="mt-1 flex items-baseline gap-1.5">
-        <span
-          className={cn(
-            "text-xl font-semibold tracking-tight tabular-nums",
-            live && "text-success",
-          )}
-        >
-          {value}
-        </span>
-        <span className="text-xs text-muted-foreground">{detail}</span>
-      </dd>
     </div>
   );
 }

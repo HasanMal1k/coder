@@ -37,9 +37,9 @@ export function stackLabel(stack?: StackName) {
   return STACKS.find((s) => s.id === stack)?.label ?? "Standard";
 }
 
-export function powerLabel(size?: PowerName) {
-  const power = POWERS.find((p) => p.id === size);
-  return power ? `${power.cpus} vCPU · ${power.memoryGb} GB` : "";
+/** A size by its name alone, for where there is no room for its figures. */
+export function powerName(size?: PowerName) {
+  return POWERS.find((p) => p.id === size)?.label ?? "";
 }
 
 export const DEFAULT_POWER: PowerName = "medium";
