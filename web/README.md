@@ -68,9 +68,24 @@ corners and outlines have been edited to the shape described below. Icons are [L
   with its own dark theme. The page the server shows in place of an editor
   or a preview that isn't up (`internal/portproxy/proxy.go`) uses the same
   gray.
-- **The work, shown as what it is.** The conversation is one column with no
-  pictures beside it: the user's words in a box on the right, everything
-  else the assistant's. What an agent does is a log, with the kind of each
+- **A chat is a channel.** Every message is a row, as in Slack: a square
+  picture, then the author's name, a few quiet words (whom it was for, or
+  an agent's job and machine) and the time, then what they wrote. Messages
+  by one author a few minutes apart share one header, with the time shown
+  on hover where the picture was. The user's picture is their initials on
+  gray; the assistant's is the terminal mark, dark on light, the one inverse
+  tone in the app; an agent's is the logo of the component it builds (the
+  graph's logos), or its initial. A small orange dot on an agent's picture
+  means it is working now. Under the title, a row of the chat's people (choose one
+  to start a message to them) and its machines. Names mentioned
+  (`@tom`) are picked out on a lighter gray. A message to an agent shows
+  "tom is on it" with its latest step until the answer comes, which quotes
+  what it answers. A question from an agent is outlined in orange while it
+  waits, like the assistant's. Pictures are shown at most 240px high and
+  open large; other files are rows to download. The box you type in offers
+  the chat's people after an `@`, takes files from a button, a paste or a
+  drop, and says underneath whom a message will go to.
+- **The work, shown as what it is.** What an agent does is a log, with the kind of each
   line (`run`, `write`, `edit`) in a column of its own and commands brighter
   than files. Code the assistant writes comes in a block with its language
   and a button to copy it. A table keeps its words whole and scrolls
@@ -119,8 +134,9 @@ src/components/
   machines/     the list page, and the create and delete dialogs
   workspace/    a machine's page: editor frame, terminal, overview
   assistant/    the chat: its page, the conversation, the transcript, the
-                composer, Markdown, and the question asked before one is
-                deleted
+                composer, Markdown, the question asked before one is
+                deleted, its people (pictures, the row under the title) and
+                its files (pictures, rows to download, files about to be sent)
   stats.tsx     a few figures in one box, for the machines page and the
                 dashboard tab
   agents/       the list of agents, on the machines page and the dashboard tab
@@ -198,6 +214,14 @@ src/lib/
   is no separate "load" step, and after a dropped connection it resumes from
   the last event seen. While the assistant is writing, the stream also
   carries the message so far, which is shown until the finished one arrives.
+- **Who a message goes to.** The composer works it out as the server will
+  (`recipientsOf` in [chat.ts](src/lib/chat.ts)): the chat's agents the text
+  mentions, or the assistant. Written only to agents, it can be sent while
+  the assistant works, so the stop button gives way to send. Files are
+  uploaded as soon as they are chosen and sent by ID with the message; on the
+  start page there is no chat yet, so they wait and are uploaded once it is
+  made. A chat's files are fetched with the session's token and shown from a
+  local address, fetched once per visit.
 - **From events to what is drawn.** `buildTranscript` turns the flat list of
   events into each of the assistant's messages with the steps it took, and
   each step with its progress and outcome. A step with no outcome is "in
@@ -205,6 +229,10 @@ src/lib/
   is how a run that was stopped or cut off shows correctly with no extra
   state. A question shows its options, each with a line of explanation,
   until it is answered, and then shrinks to the question and the answer.
+  It also pairs each message the user wrote to agents with their progress
+  (`activity` under `direct-<seq>-<handle>`) and their answers (`post`
+  events whose `reply_to` is that message), and an agent's question with
+  the next message the user wrote to that agent, which is its answer.
 - **Four tabs on what is being built.** `SidePane`
   ([side-pane.tsx](src/components/pane/side-pane.tsx)) looks the chat's
   design up once and gives it to all four. A tab is drawn when first opened

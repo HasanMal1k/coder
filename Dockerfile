@@ -12,5 +12,6 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/server ./cmd/serve
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/server /server
-EXPOSE 8080
+# 8080 for browsers, 8081 for machines' link daemons (gRPC).
+EXPOSE 8080 8081
 ENTRYPOINT ["/server"]

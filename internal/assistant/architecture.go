@@ -141,6 +141,11 @@ func (s *Service) saveDesign(ctx context.Context, ownerID, chatID, status string
 
 	s.notify(chatID)
 
+	// Who works with whom may have changed.
+	if status == DesignApproved {
+		go s.tellPeers(context.WithoutCancel(ctx), ownerID)
+	}
+
 	return nil
 }
 

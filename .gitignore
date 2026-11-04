@@ -1,1 +1,3 @@
 .env
+# The link daemon, built by `make link` for the machine image to copy in.
+images/workspace/bin/

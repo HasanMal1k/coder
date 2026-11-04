@@ -45,7 +45,10 @@ const (
 	KindAgent = "agent"
 	// KindMessage records one agent asking another something.
 	KindMessage = "message"
-	KindError   = "error"
+	// KindPost records an agent writing in the chat: its answer to the
+	// owner, or something it wants to show or ask them.
+	KindPost  = "post"
+	KindError = "error"
 )
 
 const (
@@ -120,9 +123,13 @@ type Machines interface {
 	Stop(ctx context.Context, ownerID, name string) (Machine, error)
 	Find(ctx context.Context, ownerID, name string) (Machine, error)
 	// RunTask gives a coding task to an agent inside the machine and returns
-	// its report. Different agents on one machine work at the same time.
-	// progress is called with a line of text for each thing the agent does.
-	RunTask(ctx context.Context, ownerID, name string, agent AgentRef, task string, progress func(string)) (string, error)
+	// its report, putting files on the machine first. Different agents on
+	// one machine work at the same time. progress is called with a line of
+	// text for each thing the agent does.
+	RunTask(ctx context.Context, ownerID, name string, agent AgentRef, task string, files []TaskFile, progress func(string)) (string, error)
+	// GetFile reads a file on a running machine, refusing one larger than
+	// maxSize, and returns it with its absolute path.
+	GetFile(ctx context.Context, instanceID, path string, maxSize int) ([]byte, string, error)
 	// KeepAwake stops the user's machines being shut down for being idle
 	// until the returned function is called.
 	KeepAwake(ownerID string) (done func())
@@ -155,11 +162,20 @@ type Store interface {
 type (
 	UserPayload struct {
 		Text string `json:"text"`
+		// To is who the message was for, by handle, when the owner named
+		// agents: "assistant" among them means the assistant too. Empty
+		// means the assistant alone.
+		To []string `json:"to,omitempty"`
+		// Attachments are the files that came with it.
+		Attachments []AttachmentRef `json:"attachments,omitempty"`
 	}
 
 	AssistantPayload struct {
 		Text      string     `json:"text"`
 		ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+		// Reasoning is the model's thinking before this message. It is not
+		// shown; it is sent back to the model with the rest of the history.
+		Reasoning string `json:"reasoning,omitempty"`
 		// Seen is the last event the model had been shown when it wrote
 		// this. Anything between that and this message happened while it
 		// was writing, and it has not seen it yet.
@@ -192,12 +208,13 @@ type (
 )
 
 type Service struct {
-	store    Store
-	agents   Agents
-	designs  Designs
-	services Services
-	llm      LLM
-	machines Machines
+	store       Store
+	agents      Agents
+	attachments Attachments
+	designs     Designs
+	services    Services
+	llm         LLM
+	machines    Machines
 
 	mu   sync.Mutex
 	live map[string]*liveChat
@@ -207,8 +224,15 @@ type Service struct {
 	// ports lead.
 	routes map[string]routeTable
 	// asked holds, for each user, when their agents lately asked each other
-	// things, to keep that within bounds.
+	// things or wrote in a chat, to keep that within bounds (allow).
 	asked map[string][]time.Time
+	// links reaches machines' link daemons; nil if there are none. meshKeys
+	// is the key of each chat's mesh, and linked the peers each machine
+	// says it has a stream with.
+	links    Links
+	meshKeys map[string][]byte
+	linked   map[string][]string
+
 	// guests holds what each machine last said when it asked for its
 	// record, by instance ID.
 	guests map[string]guestState
@@ -216,10 +240,11 @@ type Service struct {
 
 // Stores is the persistence the assistant needs.
 type Stores struct {
-	Chats    Store
-	Agents   Agents
-	Designs  Designs
-	Services Services
+	Chats       Store
+	Agents      Agents
+	Attachments Attachments
+	Designs     Designs
+	Services    Services
 }
 
 // liveChat is the in-memory side of a chat: who is watching it, and the run
@@ -245,16 +270,17 @@ type liveChat struct {
 // read but not continued: Send returns ErrDisabled.
 func NewService(stores Stores, llm LLM, machines Machines) *Service {
 	return &Service{
-		store:    stores.Chats,
-		agents:   stores.Agents,
-		designs:  stores.Designs,
-		services: stores.Services,
-		llm:      llm,
-		machines: machines,
-		live:     make(map[string]*liveChat),
-		running:  make(map[string]*running),
-		routes:   make(map[string]routeTable),
-		asked:    make(map[string][]time.Time),
+		store:       stores.Chats,
+		agents:      stores.Agents,
+		attachments: stores.Attachments,
+		designs:     stores.Designs,
+		services:    stores.Services,
+		llm:         llm,
+		machines:    machines,
+		live:        make(map[string]*liveChat),
+		running:     make(map[string]*running),
+		routes:      make(map[string]routeTable),
+		asked:       make(map[string][]time.Time),
 	}
 }
 
@@ -336,49 +362,10 @@ func (s *Service) DeleteChat(ctx context.Context, ownerID, id string) error {
 
 // Send adds the user's message to the chat and sets the assistant to work on
 // it in the background. If the assistant was waiting for an answer to a
-// question, the message is that answer.
+// question, the message is that answer. It is SendMessage with nothing but
+// text: a message that mentions agents goes to them instead.
 func (s *Service) Send(ctx context.Context, ownerID, id, text string) error {
-	if s.llm == nil {
-		return ErrDisabled
-	}
-
-	text = strings.TrimSpace(text)
-	if text == "" || len(text) > maxMessageLength {
-		return ErrInvalidMessage
-	}
-
-	chat, err := s.GetChat(ctx, ownerID, id)
-	if err != nil {
-		return err
-	}
-	id = chat.ID
-
-	// Claim the chat. Of two messages sent at once, one wins and the other
-	// is told the assistant is busy.
-	claimed, err := s.store.TransitionStatus(ctx, id, []string{StatusIdle, StatusWaiting}, StatusRunning)
-	if err != nil {
-		return err
-	}
-	if !claimed {
-		return ErrBusy
-	}
-
-	if err := s.recordMessage(ctx, chat, text); err != nil {
-		// Give the chat back, or it would look busy for ever.
-		s.store.SetStatus(context.WithoutCancel(ctx), id, chat.Status)
-		return err
-	}
-	s.notify(id)
-
-	// The user has spoken: whatever follows is at their bidding again.
-	s.mu.Lock()
-	live := s.liveLocked(id)
-	live.wakes, live.gaveUp = 0, false
-	s.mu.Unlock()
-
-	s.startRun(ownerID, id)
-
-	return nil
+	return s.SendMessage(ctx, ownerID, id, UserMessage{Text: text})
 }
 
 // startRun sets the assistant to work on a chat that has just been claimed.
@@ -394,12 +381,13 @@ func (s *Service) startRun(ownerID, id string) {
 	}()
 }
 
-// recordMessage stores what the user sent: as the answer to the assistant's
-// outstanding question if there is one, and as a new message otherwise.
-func (s *Service) recordMessage(ctx context.Context, chat *store.Chat, text string) error {
+// recordMessage stores what the user sent the assistant: as the answer to
+// its outstanding question if there is one, and as a new message otherwise.
+// It returns the new message's sequence number, or 0 if it was an answer.
+func (s *Service) recordMessage(ctx context.Context, chat *store.Chat, msg UserPayload) (int64, error) {
 	events, err := s.store.ListEvents(ctx, chat.ID, 0)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	// Whatever the assistant is waiting on, this is the reply to it: the
@@ -407,13 +395,22 @@ func (s *Service) recordMessage(ctx context.Context, chat *store.Chat, text stri
 	pending := unanswered(events, toolAskUser, toolProposeArchitecture)
 	if len(pending) == 0 {
 		if chat.Title == defaultTitle {
-			if err := s.store.SetTitle(ctx, chat.ID, title(text)); err != nil {
-				return err
+			named := msg.Text
+			if named == "" && len(msg.Attachments) > 0 {
+				named = msg.Attachments[0].Name
+			}
+			if err := s.store.SetTitle(ctx, chat.ID, title(named)); err != nil {
+				return 0, err
 			}
 		}
-		return s.append(ctx, chat.ID, KindUser, UserPayload{Text: text})
+		event, err := s.appendEvent(ctx, chat.ID, KindUser, msg)
+		if err != nil {
+			return 0, err
+		}
+		return event.Seq, nil
 	}
 
+	text := msg.Text + describeAttachments(msg.Attachments)
 	for i, call := range pending {
 		answer := text
 		switch {
@@ -430,11 +427,11 @@ func (s *Service) recordMessage(ctx context.Context, chat *store.Chat, text stri
 			Content:    answer,
 		})
 		if err != nil {
-			return err
+			return 0, err
 		}
 	}
 
-	return nil
+	return 0, nil
 }
 
 // Cancel stops the assistant if it is working, and withdraws its question if
@@ -501,6 +498,7 @@ func (s *Service) RecoverInterrupted(ctx context.Context) (int, error) {
 			s.append(ctx, agent.ChatID, KindAgent, AgentPayload{
 				AgentID: agent.ID,
 				Agent:   agent.Name,
+				Handle:  agent.Handle,
 				Machine: Machine{ID: agent.InstanceID, Name: agent.MachineName},
 				Content: "Error: " + interrupted,
 				Failed:  true,
@@ -611,6 +609,7 @@ func (s *Service) run(ctx context.Context, ownerID, chatID string) {
 		err = s.append(ctx, chatID, KindAssistant, AssistantPayload{
 			Text:      strings.TrimSpace(reply.Content),
 			ToolCalls: reply.ToolCalls,
+			Reasoning: reply.ReasoningContent,
 			Seen:      seen,
 		})
 		if err != nil {
@@ -724,9 +723,15 @@ func (s *Service) setDraft(chatID, draft string) {
 
 // append records an event and tells whoever is watching.
 func (s *Service) append(ctx context.Context, chatID, kind string, payload any) error {
+	_, err := s.appendEvent(ctx, chatID, kind, payload)
+	return err
+}
+
+// appendEvent is append, returning the event recorded.
+func (s *Service) appendEvent(ctx context.Context, chatID, kind string, payload any) (*store.ChatEvent, error) {
 	raw, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("encode %s event: %w", kind, err)
+		return nil, fmt.Errorf("encode %s event: %w", kind, err)
 	}
 
 	s.mu.Lock()
@@ -734,15 +739,15 @@ func (s *Service) append(ctx context.Context, chatID, kind string, payload any) 
 	s.mu.Unlock()
 
 	live.appendMu.Lock()
-	_, err = s.store.AppendEvent(ctx, chatID, kind, raw)
+	event, err := s.store.AppendEvent(ctx, chatID, kind, raw)
 	live.appendMu.Unlock()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	s.notify(chatID)
 
-	return nil
+	return event, nil
 }
 
 func (s *Service) notify(chatID string) {
@@ -816,17 +821,45 @@ func history(events []*store.ChatEvent) []Message {
 	}
 
 	var late []Message
+	// news adds something that happened beside the conversation: after the
+	// message the model was writing when it happened, if it hadn't seen it.
+	news := func(i int, m Message) {
+		if seenBy[i] >= 0 && seenBy[i] < events[i].Seq {
+			late = append(late, m)
+		} else {
+			messages = append(messages, m)
+		}
+	}
+
 	for i, event := range events {
 		switch event.Kind {
 		case KindUser:
 			var p UserPayload
 			json.Unmarshal(event.Payload, &p)
-			messages = append(messages, Message{Role: "user", Content: p.Text})
+			content := p.Text + describeAttachments(p.Attachments)
+			if len(p.To) > 0 && !slices.Contains(p.To, assistantHandle) {
+				// Written to agents, not to the assistant, and possibly
+				// while it was working: it reads it, and need not act.
+				news(i, Message{Role: "user", Content: directNews(p.To, content)})
+				continue
+			}
+			if len(p.To) > 0 {
+				content = fmt.Sprintf("[The user wrote this to you and to %s, who are answering it themselves.]\n\n%s", handlesText(p.To), content)
+			}
+			messages = append(messages, Message{Role: "user", Content: content})
+
+		case KindPost:
+			var p PostPayload
+			json.Unmarshal(event.Payload, &p)
+			if p.Queued {
+				continue
+			}
+			news(i, Message{Role: "user", Content: postNews(p)})
 
 		case KindAssistant:
 			var p AssistantPayload
 			json.Unmarshal(event.Payload, &p)
-			messages = append(messages, Message{Role: "assistant", Content: p.Text, ToolCalls: p.ToolCalls})
+			messages = append(messages, Message{Role: "assistant", Content: p.Text, ReasoningContent: p.Reasoning, ToolCalls: p.ToolCalls})
 			messages = append(messages, late...)
 			late = nil
 
@@ -841,12 +874,7 @@ func history(events []*store.ChatEvent) []Message {
 			// reaches the model as a message instead.
 			var p AgentPayload
 			json.Unmarshal(event.Payload, &p)
-			news := Message{Role: "user", Content: agentNews(p)}
-			if seenBy[i] >= 0 && seenBy[i] < event.Seq {
-				late = append(late, news)
-			} else {
-				messages = append(messages, news)
-			}
+			news(i, Message{Role: "user", Content: agentNews(p)})
 		}
 	}
 
@@ -865,6 +893,60 @@ func agentNews(p AgentPayload) string {
 	default:
 		return fmt.Sprintf("[From the platform, not the user] Background agent %q on machine %q has finished. Its report:\n\n%s", p.Agent, p.Machine.Name, p.Content)
 	}
+}
+
+// directNews tells the model of a message the user wrote to agents, not to
+// it.
+func directNews(to []string, content string) string {
+	return fmt.Sprintf("[From the platform, not to you] The user wrote this in the chat to %s directly, who will answer it themselves. You need not act on it unless it changes what you are doing.\n\n%s", handlesText(to), content)
+}
+
+// postNews tells the model of something an agent wrote in the chat.
+func postNews(p PostPayload) string {
+	who := fmt.Sprintf("%s (the %q agent on %q)", p.Agent, p.Role, p.Machine.Name)
+
+	var b strings.Builder
+	switch {
+	case p.Failed:
+		fmt.Fprintf(&b, "[From the platform, not the user] %s could not answer the user's message: %s", who, p.Text)
+	case p.ReplyTo != 0:
+		fmt.Fprintf(&b, "[From the platform, not the user] %s answered the user in the chat:\n\n%s", who, p.Text)
+	case p.Question:
+		fmt.Fprintf(&b, "[From the platform, not the user] %s asked the user in the chat:\n\n%s", who, p.Text)
+		if len(p.Options) > 0 {
+			fmt.Fprintf(&b, "\n\nOptions: %s", strings.Join(p.Options, "; "))
+		}
+		b.WriteString("\n\nThe user's answer goes to that agent, not to you.")
+	default:
+		fmt.Fprintf(&b, "[From the platform, not the user] %s wrote in the chat:\n\n%s", who, p.Text)
+	}
+	for _, a := range p.Attachments {
+		fmt.Fprintf(&b, "\n[With a file: %s (%s, %s), id %s]", a.Name, a.ContentType, sizeText(a.Size), a.ID)
+	}
+	if p.Preview != nil {
+		fmt.Fprintf(&b, "\n[With a button opening port %d%s on %q]", p.Preview.Port, p.Preview.Path, p.Machine.Name)
+	}
+
+	return b.String()
+}
+
+// handlesText lists agents by handle, leaving out the assistant: "@tom and
+// @ava".
+func handlesText(handles []string) string {
+	var named []string
+	for _, h := range handles {
+		if h != assistantHandle {
+			named = append(named, "@"+h)
+		}
+	}
+
+	switch len(named) {
+	case 0:
+		return "nobody"
+	case 1:
+		return named[0]
+	}
+	return strings.Join(named[:len(named)-1], ", ") + " and " + named[len(named)-1]
 }
 
 // repair makes a conversation acceptable to the model. The API rejects a

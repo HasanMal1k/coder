@@ -43,11 +43,22 @@ const (
 	ServiceRevisionEnv = "CODER_SERVICE_REVISION"
 )
 
+// MaxFileSize is the largest file PutFile and GetFile carry. gRPC's own
+// limit on a message is lower, so both ends raise theirs to MaxMessageSize.
+const (
+	MaxFileSize    = 10 << 20
+	MaxMessageSize = MaxFileSize + 64<<10
+)
+
 // Environment variables the control plane sets on a machine for guestd.
 const (
 	EnvInstanceID = "CODER_INSTANCE_ID"
 	EnvGuestToken = "CODER_GUEST_TOKEN"
 	EnvConnectURL = "CODER_CONNECT_URL"
+	// EnvModelContext and EnvModelOutput are the model's limits in tokens,
+	// for the coding agent. A machine made before they existed has neither.
+	EnvModelContext = "CODER_MODEL_CONTEXT"
+	EnvModelOutput  = "CODER_MODEL_OUTPUT"
 )
 
 // MuxConfig is the yamux configuration both ends of the tunnel use. Keepalives

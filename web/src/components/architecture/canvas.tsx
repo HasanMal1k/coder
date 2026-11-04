@@ -517,7 +517,7 @@ function ComponentNodeView({ data }: NodeProps<ComponentNode>) {
           <>
             <Spinner className="size-3.5 shrink-0 text-primary" />
             <span className="min-w-0 truncate" title={working.activity}>
-              <span className="font-medium">{working.name}</span>
+              <span className="font-medium">{working.handle || working.name}</span>
               <span className="text-muted-foreground">
                 {working.activity ? `: ${working.activity}` : " is working"}
               </span>
@@ -586,7 +586,7 @@ function ComponentNodeView({ data }: NodeProps<ComponentNode>) {
               size="xs"
               variant="secondary"
               className="shadow-md"
-              aria-label={`Stop ${working.name}`}
+              aria-label={`Stop ${working.handle || working.name}`}
               onClick={() => stop(working)}
             >
               <SquareIcon className="fill-current" data-icon="inline-start" />

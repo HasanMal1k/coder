@@ -4,6 +4,7 @@ import {
   CheckIcon,
   ChevronRightIcon,
   CircleSlashIcon,
+  CornerDownRightIcon,
   ExternalLinkIcon,
   MessageCircleQuestionIcon,
   MessagesSquareIcon,
@@ -13,24 +14,63 @@ import {
   XIcon,
 } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import {
   errorMessage,
   portUrl,
   type AgentExchange,
   type AgentNews,
+  type AgentPost,
   type ChatStatus,
   type DesignNode,
 } from "@/lib/api";
-import type { Step, TranscriptItem } from "@/lib/chat";
-import { formatMemory } from "@/lib/format";
+import { ASSISTANT, type Answering, type Step, type TranscriptItem } from "@/lib/chat";
+import { useNow } from "@/lib/agents";
+import { formatDateTime, formatMemory } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
 import { useAssistant } from "./assistant-provider";
+import { AttachmentList } from "./attachments";
 import { Markdown } from "./markdown";
+import { Avatar, roleText, type Author, type Member } from "./people";
+
+/** Messages from one author closer together than this read as one. */
+const GROUP_MS = 5 * 60 * 1000;
+/** How long after the user writes to an agent its silence still means "starting". */
+const STARTING_MS = 30 * 1000;
+
+/** The chat and its people, for the parts of a message that need them. */
+type Room = {
+  chatId: string;
+  members: Member[];
+  /** Answers an agent's question, or writes to it. */
+  onWriteTo: (handle: string, text: string) => void;
+};
+
+const RoomContext = createContext<Room>({ chatId: "", members: [], onWriteTo: () => {} });
+
+function useRoom() {
+  return useContext(RoomContext);
+}
+
+/** The member with a handle, or the agent with a job on a machine. */
+function findMember(members: Member[], handle: string) {
+  return members.find((m) => m.handle === handle);
+}
+
+function memberFor(members: Member[], role: string, machine: string) {
+  return members.find((m) => m.role === role && m.machine?.name === machine);
+}
+
+/** "13:14", in the reader's own clock. */
+function clock(iso: string) {
+  return new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(
+    new Date(iso),
+  );
+}
 
 /** How a step stands: still going, finished, failed, or cut short. */
 type Outcome = "working" | "done" | "failed" | "interrupted";
@@ -62,25 +102,57 @@ function text(value: unknown) {
   return typeof value === "string" ? value : "";
 }
 
-/** The conversation: what was said, and what the assistant did about it. */
+/** Who wrote an item, as a key: items in a row by one author are grouped. */
+function authorOf(item: TranscriptItem): Author | null {
+  switch (item.type) {
+    case "user":
+      return { kind: "you" };
+    case "assistant":
+    case "error":
+      return { kind: "assistant" };
+    case "post":
+      return { kind: "agent", handle: item.post.agent };
+    default:
+      // News and exchanges are the platform's, between messages.
+      return null;
+  }
+}
+
+function sameAuthor(a: Author | null, b: Author | null) {
+  if (!a || !b || a.kind !== b.kind) return false;
+  return a.kind !== "agent" || (b.kind === "agent" && a.handle === b.handle);
+}
+
+/**
+ * The conversation, as a channel: everything the user, the assistant and the
+ * agents said, each with who said it and when, and what the assistant did.
+ */
 export function Transcript({
+  chatId,
   items,
   status,
   draft,
   compact,
+  members,
   onAnswer,
   onApprove,
+  onWriteTo,
 }: {
+  chatId: string;
   items: TranscriptItem[];
   status: ChatStatus;
   /** The message the assistant is writing right now, as far as it has got. */
   draft: string;
   /** With the design beside it: less room, so less space between things. */
   compact: boolean;
+  /** Who is in the chat. */
+  members: Member[];
   /** Answers the question the assistant is waiting on. */
   onAnswer: (answer: string) => void;
   /** Agrees to the design the assistant is waiting on. */
   onApprove: () => Promise<void>;
+  /** Writes to one agent: the answer to its question. */
+  onWriteTo: (handle: string, text: string) => void;
 }) {
   const last = items[items.length - 1];
   // Between steps the assistant is deciding what to do next. While a step is
@@ -91,94 +163,457 @@ export function Transcript({
     !draft &&
     !(last?.type === "assistant" && last.steps.some((step) => !step.result));
 
+  // What the assistant is writing or thinking joins its last message if that
+  // was the last thing said.
+  const lastAuthor = last ? authorOf(last) : null;
+  const trailing = lastAuthor?.kind === "assistant";
+  const now = new Date(useNow(30000)).toISOString();
+
   return (
-    <div className={cn("flex flex-col", compact ? "gap-4" : "gap-6")}>
-      {items.map((item) => {
-        switch (item.type) {
-          case "user":
-            return (
-              <div key={item.seq} className="flex justify-end">
-                <div className="max-w-[85%] rounded-xl bg-muted px-4 py-2.5 text-sm leading-relaxed wrap-anywhere whitespace-pre-wrap">
-                  {item.text}
+    <RoomContext.Provider value={{ chatId, members, onWriteTo }}>
+      <div className="flex flex-col">
+        {items.map((item, index) => {
+          const author = authorOf(item);
+          const before = index > 0 ? items[index - 1] : undefined;
+          const grouped =
+            !!before &&
+            sameAuthor(author, authorOf(before)) &&
+            Date.parse(item.at) - Date.parse(before.at) < GROUP_MS;
+
+          return (
+            <div
+              key={item.seq}
+              className={cn(index > 0 && (grouped ? "mt-2" : compact ? "mt-5" : "mt-6"))}
+            >
+              <ItemView
+                item={item}
+                author={author}
+                grouped={grouped}
+                status={status}
+                onAnswer={onAnswer}
+                onApprove={onApprove}
+              />
+            </div>
+          );
+        })}
+
+        {(draft || thinking) && (
+          <div className={cn(items.length > 0 && (trailing ? "mt-2" : "mt-6"))}>
+            <Row author={{ kind: "assistant" }} at={now} grouped={trailing}>
+              {draft ? (
+                // Shown as it is written, with a mark where the next word will
+                // go; replaced by the finished message.
+                <div aria-live="off" data-draft className="[&>div>p:last-child]:caret-after">
+                  <Markdown>{draft}</Markdown>
                 </div>
-              </div>
-            );
-
-          case "assistant":
-            return (
-              <AssistantTurn key={item.seq}>
-                {item.text && <Markdown>{item.text}</Markdown>}
-                {item.steps.length > 0 && (
-                  <div className="flex flex-col gap-2">
-                    {item.steps.map((step) => (
-                      <StepView
-                        key={step.call.id}
-                        step={step}
-                        outcome={outcomeOf(step, status)}
-                        status={status}
-                        onAnswer={onAnswer}
-                        onApprove={onApprove}
-                      />
-                    ))}
-                  </div>
-                )}
-              </AssistantTurn>
-            );
-
-          case "news":
-            return <NewsLine key={item.seq} news={item.news} />;
-
-          case "exchange":
-            return <ExchangeView key={item.seq} exchange={item.exchange} />;
-
-          case "error":
-            return item.stopped ? (
-              <p key={item.seq} className="flex items-center gap-2 text-sm text-muted-foreground">
-                <CircleSlashIcon className="size-4" />
-                You stopped the assistant.
-              </p>
-            ) : (
-              <div
-                key={item.seq}
-                role="alert"
-                className="flex items-start gap-2.5 rounded-lg border border-destructive/40 px-4 py-3 text-sm text-destructive"
-              >
-                <TriangleAlertIcon className="mt-0.5 size-4 shrink-0" />
-                <p className="min-w-0 wrap-anywhere">{item.message}</p>
-              </div>
-            );
-        }
-      })}
-
-      {draft && (
-        <AssistantTurn>
-          {/* Shown as it is written, with a mark where the next word will
-              go; replaced by the finished message. */}
-          <div aria-live="off" data-draft className="[&>div>p:last-child]:caret-after">
-            <Markdown>{draft}</Markdown>
+              ) : (
+                <p className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
+                  <Spinner />
+                  Thinking…
+                </p>
+              )}
+            </Row>
           </div>
-        </AssistantTurn>
-      )}
+        )}
+      </div>
+    </RoomContext.Provider>
+  );
+}
 
-      {thinking && (
-        <AssistantTurn>
-          <p className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
-            <Spinner />
-            Thinking…
+function ItemView({
+  item,
+  author,
+  grouped,
+  status,
+  onAnswer,
+  onApprove,
+}: {
+  item: TranscriptItem;
+  author: Author | null;
+  grouped: boolean;
+  status: ChatStatus;
+  onAnswer: (answer: string) => void;
+  onApprove: () => Promise<void>;
+}) {
+  const { chatId, members } = useRoom();
+
+  switch (item.type) {
+    case "user": {
+      const agents = item.to.filter((handle) => handle !== ASSISTANT);
+      return (
+        <Row
+          author={author!}
+          at={item.at}
+          grouped={grouped}
+          detail={agents.length > 0 ? `to ${agents.map((h) => "@" + h).join(", ")}` : undefined}
+        >
+          {item.text && (
+            <p className="text-sm leading-relaxed wrap-anywhere whitespace-pre-wrap">
+              <Mentions text={item.text} handles={members.map((m) => m.handle)} />
+            </p>
+          )}
+          <AttachmentList chatId={chatId} files={item.attachments} />
+          {item.answering.map((one) => (
+            <AnsweringLine key={one.handle} answering={one} at={item.at} />
+          ))}
+        </Row>
+      );
+    }
+
+    case "assistant":
+      return (
+        <Row author={author!} at={item.at} grouped={grouped}>
+          {item.text && <Markdown>{item.text}</Markdown>}
+          {item.steps.length > 0 && (
+            <div className="flex flex-col gap-2">
+              {item.steps.map((step) => (
+                <StepView
+                  key={step.call.id}
+                  step={step}
+                  outcome={outcomeOf(step, status)}
+                  status={status}
+                  onAnswer={onAnswer}
+                  onApprove={onApprove}
+                />
+              ))}
+            </div>
+          )}
+        </Row>
+      );
+
+    case "post":
+      return <PostView item={item} grouped={grouped} />;
+
+    case "news":
+      return (
+        <Aside>
+          <NewsLine news={item.news} />
+        </Aside>
+      );
+
+    case "exchange":
+      return (
+        <Aside>
+          <ExchangeView exchange={item.exchange} />
+        </Aside>
+      );
+
+    case "error":
+      return (
+        <Row author={author!} at={item.at} grouped={grouped}>
+          {item.stopped ? (
+            <p className="flex items-center gap-2 text-sm text-muted-foreground">
+              <CircleSlashIcon className="size-4" />
+              You stopped the assistant.
+            </p>
+          ) : (
+            <div
+              role="alert"
+              className="flex items-start gap-2.5 rounded-lg border border-destructive/40 px-4 py-3 text-sm text-destructive"
+            >
+              <TriangleAlertIcon className="mt-0.5 size-4 shrink-0" />
+              <p className="min-w-0 wrap-anywhere">{item.message}</p>
+            </div>
+          )}
+        </Row>
+      );
+  }
+}
+
+/**
+ * One message: who wrote it and when, beside what they wrote. Following
+ * another by the same author shortly after, it leaves both out, and shows the
+ * time only on hover, in the picture's place.
+ */
+function Row({
+  author,
+  at,
+  grouped,
+  detail,
+  children,
+}: {
+  author: Author;
+  at: string;
+  grouped: boolean;
+  /** A few quiet words after the name: whom it was for, or what an agent does. */
+  detail?: string;
+  children: ReactNode;
+}) {
+  const { members } = useRoom();
+  const shown: Author =
+    author.kind === "agent" ? { ...author, member: findMember(members, author.handle) } : author;
+  const name =
+    author.kind === "you" ? "You" : author.kind === "assistant" ? "Assistant" : author.handle;
+
+  return (
+    <div className="group/row flex min-w-0 gap-3">
+      <div className="flex w-8 shrink-0 justify-center">
+        {grouped ? (
+          <time
+            dateTime={at}
+            title={formatDateTime(at)}
+            className="pt-0.5 text-[10px] text-muted-foreground opacity-0 tabular-nums transition-opacity group-hover/row:opacity-100"
+          >
+            {clock(at)}
+          </time>
+        ) : (
+          <Avatar author={shown} />
+        )}
+      </div>
+      <div className="flex min-w-0 flex-1 flex-col gap-2">
+        {!grouped && (
+          <p className="flex min-w-0 items-baseline gap-2 text-sm leading-5">
+            <span className="shrink-0 font-semibold">{name}</span>
+            {detail && (
+              <span className="min-w-0 truncate text-xs text-muted-foreground">{detail}</span>
+            )}
+            <time
+              dateTime={at}
+              title={formatDateTime(at)}
+              className="shrink-0 text-xs text-muted-foreground/80 tabular-nums"
+            >
+              {clock(at)}
+            </time>
           </p>
-        </AssistantTurn>
-      )}
+        )}
+        {children}
+      </div>
     </div>
   );
 }
 
+/** Something the platform says between messages, in line with what people wrote. */
+function Aside({ children }: { children: ReactNode }) {
+  return <div className="pl-11">{children}</div>;
+}
+
+/** Text with the names of people in the chat picked out where they are mentioned. */
+function Mentions({ text, handles }: { text: string; handles: string[] }) {
+  const parts = text.split(/(@[a-z][a-z0-9-]*)/gi);
+
+  return (
+    <>
+      {parts.map((part, index) =>
+        part.startsWith("@") && handles.includes(part.slice(1).toLowerCase()) ? (
+          <span key={index} className="rounded-sm bg-secondary px-1 font-medium">
+            {part}
+          </span>
+        ) : (
+          part
+        ),
+      )}
+    </>
+  );
+}
+
 /**
- * What the assistant said and did in one go. It has no picture beside it:
- * the user's words sit to the right in a box, and everything else is the
- * assistant's.
+ * Under a message written to an agent: that it is working on it, and what
+ * it is doing, until its answer arrives (which is shown where it arrives).
  */
-function AssistantTurn({ children }: { children: ReactNode }) {
-  return <div className="flex min-w-0 flex-col gap-3">{children}</div>;
+function AnsweringLine({ answering, at }: { answering: Answering; at: string }) {
+  const { members } = useRoom();
+  const now = useNow(5000);
+  if (answering.answered) return null;
+
+  const member = findMember(members, answering.handle);
+  const author: Author = { kind: "agent", handle: answering.handle, member };
+  const doing = answering.activity[answering.activity.length - 1];
+  const starting = now - Date.parse(at) < STARTING_MS;
+
+  let line: ReactNode;
+  if (answering.queued) {
+    line = (
+      <span className="text-muted-foreground">
+        <span className="font-medium text-foreground">{answering.handle}</span> is busy with another
+        task, and will read this when it&apos;s done.
+      </span>
+    );
+  } else if (member?.status === "working" || starting) {
+    line = (
+      <span className="flex min-w-0 items-center gap-2 text-muted-foreground">
+        <Spinner className="shrink-0 text-primary" />
+        <span className="min-w-0 truncate">
+          <span className="font-medium text-foreground">{answering.handle}</span> is on it
+          {/* Each step it takes changes this; read out, it would be a running commentary. */}
+          {doing && (
+            <span aria-live="off" className="text-muted-foreground/80">
+              : {doing}
+            </span>
+          )}
+        </span>
+      </span>
+    );
+  } else {
+    line = (
+      <span className="text-muted-foreground">
+        <span className="font-medium text-foreground">{answering.handle}</span> stopped before
+        answering.
+      </span>
+    );
+  }
+
+  return (
+    <div role="status" className="flex items-center gap-2 text-sm">
+      <Avatar author={author} size="sm" />
+      {line}
+    </div>
+  );
+}
+
+/** Something an agent wrote: an answer, something to look at, or a question. */
+function PostView({
+  item,
+  grouped,
+}: {
+  item: Extract<TranscriptItem, { type: "post" }>;
+  grouped: boolean;
+}) {
+  const { chatId, onWriteTo } = useRoom();
+  const { post, quote, answer } = item;
+  const open = post.question && answer === undefined;
+
+  const body = (
+    <>
+      {post.failed ? (
+        <p
+          className={cn(
+            "flex items-start gap-2 text-sm wrap-anywhere",
+            post.stopped ? "text-muted-foreground" : "text-destructive",
+          )}
+        >
+          {post.stopped ? (
+            <CircleSlashIcon className="mt-0.5 size-4 shrink-0" />
+          ) : (
+            <TriangleAlertIcon className="mt-0.5 size-4 shrink-0" />
+          )}
+          {post.stopped
+            ? "Stopped before answering."
+            : `Couldn't answer: ${post.text.replace(/^Error: /, "")}`}
+        </p>
+      ) : (
+        post.text && <Markdown>{post.text}</Markdown>
+      )}
+      <AttachmentList chatId={chatId} files={post.attachments ?? []} />
+      {post.preview && <PostPreviewButton post={post} />}
+    </>
+  );
+
+  return (
+    <Row
+      author={{ kind: "agent", handle: post.agent }}
+      at={item.at}
+      grouped={grouped}
+      detail={roleText(post.role, post.machine.name)}
+    >
+      {quote !== undefined && (
+        <p className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+          <CornerDownRightIcon className="size-3.5 shrink-0" />
+          <span className="shrink-0">Answering you:</span>
+          <span className="min-w-0 truncate italic">{quote || "your files"}</span>
+        </p>
+      )}
+
+      {post.question ? (
+        <div
+          className={cn(
+            "flex flex-col gap-3 rounded-xl border bg-card p-4",
+            // Waiting on the user: outlined in the accent, the one thing to act on.
+            open && "border-primary/60",
+          )}
+        >
+          <div className="flex items-start gap-2.5">
+            <MessageCircleQuestionIcon
+              className={cn(
+                "mt-0.5 size-4 shrink-0",
+                open ? "text-primary" : "text-muted-foreground",
+              )}
+            />
+            <div className="flex min-w-0 flex-1 flex-col gap-3">{body}</div>
+          </div>
+
+          {answer !== undefined ? (
+            <p className="flex items-start gap-2.5 text-sm font-medium">
+              <CheckIcon className="mt-0.5 size-4 shrink-0 text-success" />
+              <span className="min-w-0 wrap-anywhere whitespace-pre-wrap">{answer}</span>
+            </p>
+          ) : (
+            <>
+              {(post.options?.length ?? 0) > 0 && (
+                <div className="flex flex-col gap-2" role="group" aria-label="Answers">
+                  {post.options!.map((option, index) => (
+                    <button
+                      key={option}
+                      type="button"
+                      onClick={() => onWriteTo(post.agent, option)}
+                      className="flex items-center gap-2 rounded-lg bg-muted/60 px-3.5 py-2.5 text-left text-sm font-medium transition-colors outline-none hover:bg-accent focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                    >
+                      <span className="min-w-0 wrap-anywhere">{option}</span>
+                      {/* Agents are told to put their own pick first. */}
+                      {index === 0 && post.options!.length > 1 && (
+                        <Badge variant="secondary" className="shrink-0">
+                          Suggested
+                        </Badge>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <p className="text-xs text-muted-foreground">
+                Or write to @{post.agent} below. Your answer goes to {post.agent} only.
+              </p>
+            </>
+          )}
+        </div>
+      ) : (
+        body
+      )}
+    </Row>
+  );
+}
+
+/** A button opening a page an agent serves, as it asked. */
+function PostPreviewButton({ post }: { post: AgentPost }) {
+  const [opening, setOpening] = useState(false);
+  const preview = post.preview!;
+  const label = preview.label || `Port ${preview.port}${preview.path ?? ""}`;
+
+  async function open() {
+    // Opened now, while the browser still counts this as the user's click;
+    // see Preview below.
+    const tab = window.open("", "_blank");
+    setOpening(true);
+    try {
+      const url = await portUrl(post.machine.id, preview.port, preview.path || "/");
+      if (tab) {
+        tab.opener = null;
+        tab.location.href = url;
+      } else {
+        window.location.href = url;
+      }
+    } catch (err) {
+      tab?.close();
+      toast.error(`Couldn't open ${label}`, { description: errorMessage(err) });
+    } finally {
+      setOpening(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+      <Button variant="outline" size="sm" onClick={open} disabled={opening}>
+        {opening ? (
+          <Spinner data-icon="inline-start" />
+        ) : (
+          <ExternalLinkIcon data-icon="inline-start" />
+        )}
+        Open {label}
+      </Button>
+      <span className="font-mono text-xs text-muted-foreground">
+        {post.machine.name}:{preview.port}
+        {preview.path}
+      </span>
+    </div>
+  );
 }
 
 function StepView({
@@ -472,6 +907,8 @@ function CodingTask({ step, outcome, machine }: { step: Step; outcome: Outcome; 
   }[outcome];
 
   const background = isBackground(step);
+  const { members } = useRoom();
+  const member = memberFor(members, agentOf(step), machine);
   // A background task's report comes with the news that it finished; the
   // call's own result only said that it had started.
   const outcomeText = background ? step.news?.content : step.result?.content;
@@ -479,9 +916,14 @@ function CodingTask({ step, outcome, machine }: { step: Step; outcome: Outcome; 
   return (
     <div className="overflow-hidden rounded-xl border bg-card">
       <div className="flex items-center gap-2.5 px-4 py-3 text-sm">
-        <SquareTerminalIcon className="size-4 shrink-0 text-muted-foreground" />
+        {member ? (
+          <Avatar author={{ kind: "agent", handle: member.handle, member }} size="sm" />
+        ) : (
+          <SquareTerminalIcon className="size-4 shrink-0 text-muted-foreground" />
+        )}
         <p className="min-w-0 flex-1 truncate">
-          <span className="font-medium">{agentOf(step)}</span>
+          <span className="font-medium">{member ? member.handle : agentOf(step)}</span>
+          {member && <span className="text-muted-foreground"> ({member.role})</span>}
           <span className="text-muted-foreground">{doing}</span>
           <MachineName step={step} name={machine} />
         </p>
@@ -771,7 +1213,8 @@ function NewsLine({ news }: { news: AgentNews }) {
         )}
       />
       <span className="min-w-0 truncate">
-        <span className="font-medium text-foreground">{news.agent}</span> on{" "}
+        <span className="font-medium text-foreground">{news.handle ?? news.agent}</span>
+        {news.handle && ` (${news.agent})`} on{" "}
         <span className="font-mono">{news.machine.name}</span> {how}
       </span>
       <span aria-hidden className="h-px min-w-6 flex-1 bg-border" />

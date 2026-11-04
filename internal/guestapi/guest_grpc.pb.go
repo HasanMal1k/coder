@@ -22,6 +22,8 @@ const (
 	Guest_Terminal_FullMethodName = "/coder.guest.v1.Guest/Terminal"
 	Guest_Forward_FullMethodName  = "/coder.guest.v1.Guest/Forward"
 	Guest_Ping_FullMethodName     = "/coder.guest.v1.Guest/Ping"
+	Guest_PutFile_FullMethodName  = "/coder.guest.v1.Guest/PutFile"
+	Guest_GetFile_FullMethodName  = "/coder.guest.v1.Guest/GetFile"
 )
 
 // GuestClient is the client API for Guest service.
@@ -43,6 +45,12 @@ type GuestClient interface {
 	Forward(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ForwardRequest, ForwardResponse], error)
 	// Ping checks that the guest is alive.
 	Ping(ctx context.Context, in *PingRequest, opts ...grpc.CallOption) (*PingResponse, error)
+	// PutFile writes a file on the machine, creating the folders it needs and
+	// replacing a file already there. The file belongs to the machine's user.
+	PutFile(ctx context.Context, in *PutFileRequest, opts ...grpc.CallOption) (*PutFileResponse, error)
+	// GetFile reads a file on the machine. A file larger than max_size is
+	// refused with FAILED_PRECONDITION, a missing one with NOT_FOUND.
+	GetFile(ctx context.Context, in *GetFileRequest, opts ...grpc.CallOption) (*GetFileResponse, error)
 }
 
 type guestClient struct {
@@ -89,6 +97,26 @@ func (c *guestClient) Ping(ctx context.Context, in *PingRequest, opts ...grpc.Ca
 	return out, nil
 }
 
+func (c *guestClient) PutFile(ctx context.Context, in *PutFileRequest, opts ...grpc.CallOption) (*PutFileResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PutFileResponse)
+	err := c.cc.Invoke(ctx, Guest_PutFile_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *guestClient) GetFile(ctx context.Context, in *GetFileRequest, opts ...grpc.CallOption) (*GetFileResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetFileResponse)
+	err := c.cc.Invoke(ctx, Guest_GetFile_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // GuestServer is the server API for Guest service.
 // All implementations must embed UnimplementedGuestServer
 // for forward compatibility.
@@ -108,6 +136,12 @@ type GuestServer interface {
 	Forward(grpc.BidiStreamingServer[ForwardRequest, ForwardResponse]) error
 	// Ping checks that the guest is alive.
 	Ping(context.Context, *PingRequest) (*PingResponse, error)
+	// PutFile writes a file on the machine, creating the folders it needs and
+	// replacing a file already there. The file belongs to the machine's user.
+	PutFile(context.Context, *PutFileRequest) (*PutFileResponse, error)
+	// GetFile reads a file on the machine. A file larger than max_size is
+	// refused with FAILED_PRECONDITION, a missing one with NOT_FOUND.
+	GetFile(context.Context, *GetFileRequest) (*GetFileResponse, error)
 	mustEmbedUnimplementedGuestServer()
 }
 
@@ -126,6 +160,12 @@ func (UnimplementedGuestServer) Forward(grpc.BidiStreamingServer[ForwardRequest,
 }
 func (UnimplementedGuestServer) Ping(context.Context, *PingRequest) (*PingResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Ping not implemented")
+}
+func (UnimplementedGuestServer) PutFile(context.Context, *PutFileRequest) (*PutFileResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PutFile not implemented")
+}
+func (UnimplementedGuestServer) GetFile(context.Context, *GetFileRequest) (*GetFileResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetFile not implemented")
 }
 func (UnimplementedGuestServer) mustEmbedUnimplementedGuestServer() {}
 func (UnimplementedGuestServer) testEmbeddedByValue()               {}
@@ -180,6 +220,42 @@ func _Guest_Ping_Handler(srv interface{}, ctx context.Context, dec func(interfac
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Guest_PutFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PutFileRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GuestServer).PutFile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Guest_PutFile_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GuestServer).PutFile(ctx, req.(*PutFileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Guest_GetFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetFileRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GuestServer).GetFile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Guest_GetFile_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GuestServer).GetFile(ctx, req.(*GetFileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Guest_ServiceDesc is the grpc.ServiceDesc for Guest service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -190,6 +266,14 @@ var Guest_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Ping",
 			Handler:    _Guest_Ping_Handler,
+		},
+		{
+			MethodName: "PutFile",
+			Handler:    _Guest_PutFile_Handler,
+		},
+		{
+			MethodName: "GetFile",
+			Handler:    _Guest_GetFile_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

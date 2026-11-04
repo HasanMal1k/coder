@@ -1,0 +1,108 @@
+syntax = "proto3";
+
+package coder.link.v1;
+
+option go_package = "github.com/HasanMal1k/coder/internal/linkapi;linkapi";
+
+// Link is how the nodes of the distributed harness talk: the link daemon
+// (linkd) on every machine, and the control plane. A machine's linkd opens
+// one Channel to the control plane and keeps it open; docs/HARNESS.md has
+// the whole design, most of which is not built yet.
+//
+// A machine proves which machine it is with the same credential it presents
+// everywhere else, in the call's metadata:
+//
+//   authorization: Bearer <instance id>.<guest token>
+service Link {
+  // Channel is one long-lived stream between two nodes. Either side sends
+  // frames at any time, for as long as the stream lasts. The first frame
+  // each side sends must be hello.
+  rpc Channel(stream Frame) returns (stream Frame);
+}
+
+// Frame is one message on a Channel.
+message Frame {
+  // id is chosen by the sender and is unique among the frames it has sent
+  // on this stream that expect an answer. Zero means no answer is expected.
+  uint64 id = 1;
+  // reply_to is the id of the frame this one answers, or zero.
+  uint64 reply_to = 2;
+
+  // More kinds of frame are added here as the harness is built. A node
+  // ignores a kind it does not know.
+  oneof body {
+    Hello hello = 10;
+    Ping ping = 11;
+    Pong pong = 12;
+    Peers peers = 13;
+    Proof proof = 14;
+    Status status = 15;
+  }
+}
+
+// Hello is the first frame each side sends: what it is, and which revision
+// of this protocol it speaks.
+message Hello {
+  // protocol is the revision of this protocol the sender speaks. A node
+  // ends a stream whose other side speaks a revision it does not.
+  uint32 protocol = 1;
+  // name says what the sender is, for logs: "linkd 0.1.0".
+  string name = 2;
+
+  // The rest is set only between two machines, which have no credential
+  // the other can check and so prove themselves with their mesh's key.
+
+  // instance_id is which machine the sender says it is.
+  string instance_id = 3;
+  // mesh is the mesh this stream belongs to.
+  string mesh = 4;
+  // nonce is a challenge: the other side answers with a Proof made from it.
+  bytes nonce = 5;
+}
+
+// Ping asks whether the other side is there. It is answered with a Pong
+// whose reply_to is the ping's id.
+message Ping {}
+
+message Pong {}
+
+// Peers is what the control plane tells a machine about the machines it
+// works with: sent when its link attaches and whenever that changes. It
+// replaces what was sent before.
+message Peers {
+  repeated Mesh meshes = 1;
+}
+
+// Mesh is the machines building one design together.
+message Mesh {
+  // id names the mesh: the chat whose design it is.
+  string id = 1;
+  // key is shared by the machines of this mesh and nobody else. They prove
+  // themselves to each other with it; it is never sent between them.
+  bytes key = 2;
+  // peers are the machines this one has a connection with in the design.
+  repeated Peer peers = 3;
+}
+
+message Peer {
+  string instance_id = 1;
+  // machine is its name, which is also its hostname on the owner's network.
+  string machine = 2;
+  // address is where its link daemon listens for peers: "http://api:7600".
+  string address = 3;
+}
+
+// Proof answers the challenge in the other side's Hello: an HMAC-SHA256,
+// under the mesh's key, of the role of the sender ("dial" or "accept"), the
+// two machines' IDs, the mesh and the other side's nonce. The machine with
+// the smaller ID dials; the one that accepts proves itself first.
+message Proof {
+  bytes mac = 1;
+}
+
+// Status is what a machine reports of itself, sent to the control plane
+// whenever it changes. More is added to it as the harness is built.
+message Status {
+  // linked are the IDs of the peers it has a proven stream with right now.
+  repeated string linked = 1;
+}

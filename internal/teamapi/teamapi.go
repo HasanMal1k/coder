@@ -43,6 +43,8 @@ type Teams interface {
 	AskAgent(ctx context.Context, ownerID, fromMachine, fromAgent, toMachine, toAgent, question string) (string, error)
 	RunService(ctx context.Context, machine *store.Instance, name, command, directory string, port int) (string, error)
 	StopService(ctx context.Context, machine *store.Instance, name string) (string, error)
+	// PostToChat writes in the owner's chat for an agent on machine.
+	PostToChat(ctx context.Context, machine *store.Instance, post assistant.AgentPost) (string, error)
 }
 
 type Handler struct {

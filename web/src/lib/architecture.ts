@@ -7,9 +7,10 @@ const REFRESH_MS = 3000;
 
 /**
  * A chat's design, kept up to date: `undefined` until first loaded, `null`
- * if the chat has none. Remount (change `key`) to follow another chat.
+ * if the chat has none. Remount (change `key`) to follow another chat. Pass
+ * a longer interval where being a few seconds behind does not matter.
  */
-export function useArchitecture(chatId: string) {
+export function useArchitecture(chatId: string, intervalMs = REFRESH_MS) {
   const [architecture, setArchitecture] = useState<Architecture | null | undefined>(undefined);
 
   const refresh = useCallback(async () => {
@@ -20,7 +21,7 @@ export function useArchitecture(chatId: string) {
     }
   }, [chatId]);
 
-  usePolling(refresh, REFRESH_MS);
+  usePolling(refresh, intervalMs);
 
   return { architecture, refresh };
 }

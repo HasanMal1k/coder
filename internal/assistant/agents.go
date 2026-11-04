@@ -61,14 +61,19 @@ type AgentRef struct {
 	// ID identifies the agent's conversation, so it keeps its memory from
 	// one task to the next.
 	ID string
-	// Name is what the agent is called, for telling it who it is.
-	Name string
+	// Name is the agent's job and Handle its own name, for telling it who
+	// it is.
+	Name   string
+	Handle string
 }
 
 // Agents is the persistence agents need. *store.AgentRepository implements
 // it.
 type Agents interface {
-	Ensure(ctx context.Context, ownerID, chatID, instanceID, name string) (*store.Agent, error)
+	// Ensure creates an agent called handle, or returns the one there is;
+	// store.ErrHandleTaken if another of the owner's agents has handle.
+	Ensure(ctx context.Context, ownerID, chatID, instanceID, name, handle string) (*store.Agent, error)
+	Handles(ctx context.Context, ownerID string) ([]string, error)
 	GetByID(ctx context.Context, id, ownerID string) (*store.Agent, error)
 	ListByOwner(ctx context.Context, ownerID string) ([]*store.Agent, error)
 	ListByChat(ctx context.Context, chatID string) ([]*store.Agent, error)
@@ -80,10 +85,10 @@ type Agents interface {
 	ListTasks(ctx context.Context, ownerID string, perAgent int) ([]*store.AgentTask, error)
 	AddNote(ctx context.Context, note *store.AgentNote) error
 	ListNotes(ctx context.Context, ownerID string, limit int) ([]*store.AgentNote, error)
-	// AddMessage leaves a question for an agent that is busy; TakeMessages
-	// hands over those waiting for it, once.
+	// AddMessage leaves a message for an agent that is busy; TakeMessages
+	// hands over those waiting for it, from the owner or from agents, once.
 	AddMessage(ctx context.Context, toAgentID string, msg *store.AgentMessage) error
-	TakeMessages(ctx context.Context, agentID string) ([]*store.AgentMessage, error)
+	TakeMessages(ctx context.Context, agentID string, fromOwner bool) ([]*store.AgentMessage, error)
 }
 
 // AgentPayload is the payload of an "agent" event: a background agent has
@@ -91,6 +96,8 @@ type Agents interface {
 type AgentPayload struct {
 	AgentID string `json:"agent_id"`
 	Agent   string `json:"agent"`
+	// Handle is the agent's own name.
+	Handle string `json:"handle,omitempty"`
 	// ToolCallID is the call that set the agent going, so the interface can
 	// show the outcome where the task was started.
 	ToolCallID string  `json:"tool_call_id"`
@@ -107,10 +114,12 @@ type job struct {
 	ownerID string
 	chatID  string
 	// callID is the tool call the task came from.
-	callID     string
-	machine    Machine
-	agent      *store.Agent
-	task       string
+	callID  string
+	machine Machine
+	agent   *store.Agent
+	task    string
+	// files are put on the machine before the task is given.
+	files      []TaskFile
 	background bool
 }
 
@@ -190,7 +199,7 @@ func (s *Service) cancelAgent(agentID string, byUser bool) bool {
 // its first. In the foreground it returns the agent's report once the task is
 // done. In the background it returns at once, and the chat is told when the
 // agent finishes.
-func (s *Service) assign(ctx context.Context, ownerID, chatID, callID string, m Machine, name, task string, background bool) (string, error) {
+func (s *Service) assign(ctx context.Context, ownerID, chatID, callID string, m Machine, name, task string, files []TaskFile, background bool) (string, error) {
 	if name == "" {
 		name = defaultAgentName
 	}
@@ -198,10 +207,11 @@ func (s *Service) assign(ctx context.Context, ownerID, chatID, callID string, m 
 		return "", fmt.Errorf("%q is not a valid agent name: use 1-40 lowercase letters, digits or hyphens, such as \"backend\" or \"tester\"", name)
 	}
 
-	agent, err := s.agents.Ensure(ctx, ownerID, chatID, m.ID, name)
+	agent, err := s.ensureAgent(ctx, ownerID, chatID, m.ID, name)
 	if err != nil {
 		return "", err
 	}
+	name = agent.Name
 
 	// Claim the agent. One agent does one thing at a time; two tasks for the
 	// same agent would be two sets of edits to the same conversation.
@@ -220,11 +230,14 @@ func (s *Service) assign(ctx context.Context, ownerID, chatID, callID string, m 
 		machine:    m,
 		agent:      agent,
 		task:       task,
+		files:      files,
 		background: background,
 	}
 
 	if !background {
-		return s.work(ctx, j)
+		report, err := s.work(ctx, j)
+		s.followUp(ownerID, chatID, agent)
+		return report, err
 	}
 
 	// On its own from here: it outlives the run that started it, and the
@@ -232,9 +245,42 @@ func (s *Service) assign(ctx context.Context, ownerID, chatID, callID string, m 
 	go func() {
 		report, err := s.work(context.WithoutCancel(ctx), j)
 		s.finished(j, report, err)
+		s.followUp(ownerID, chatID, agent)
 	}()
 
-	return fmt.Sprintf("Agent %q is now working on %q in the background. You will be sent a message when it finishes, so do not wait for it or check on it; carry on with anything else, or end your turn.", name, m.Name), nil
+	return fmt.Sprintf("Agent %q (the user calls it @%s) is now working on %q in the background. You will be sent a message when it finishes, so do not wait for it or check on it; carry on with anything else, or end your turn.", name, agent.Handle, m.Name), nil
+}
+
+// ensureAgent returns the chat's agent with the given job on a machine,
+// creating it with a handle of its own if there is none. A name that is the
+// handle of one of the chat's agents is that agent.
+func (s *Service) ensureAgent(ctx context.Context, ownerID, chatID, instanceID, name string) (*store.Agent, error) {
+	agents, err := s.agents.ListByChat(ctx, chatID)
+	if err != nil {
+		return nil, err
+	}
+	for _, agent := range agents {
+		if agent.InstanceID == instanceID && (agent.Name == name || agent.Handle == name) {
+			return agent, nil
+		}
+	}
+
+	// Two agents made at once may both be offered the same handle; the one
+	// that loses tries the next.
+	for range 5 {
+		taken, err := s.agents.Handles(ctx, ownerID)
+		if err != nil {
+			return nil, err
+		}
+
+		agent, err := s.agents.Ensure(ctx, ownerID, chatID, instanceID, name, nextHandle(append(taken, assistantHandle)))
+		if errors.Is(err, store.ErrHandleTaken) {
+			continue
+		}
+		return agent, err
+	}
+
+	return nil, fmt.Errorf("could not find a free name for agent %q", name)
 }
 
 // work carries out a job and records how it ended.
@@ -266,7 +312,8 @@ func (s *Service) work(ctx context.Context, j job) (string, error) {
 		notes(text)
 	}
 
-	report, err := s.machines.RunTask(ctx, j.ownerID, j.machine.Name, AgentRef{ID: j.agent.ID, Name: j.agent.Name}, s.withMessages(ctx, j), progress)
+	agent := AgentRef{ID: j.agent.ID, Name: j.agent.Name, Handle: j.agent.Handle}
+	report, err := s.machines.RunTask(ctx, j.ownerID, j.machine.Name, agent, s.withMessages(ctx, j), j.files, progress)
 
 	s.mu.Lock()
 	delete(s.running, j.agent.ID)
@@ -300,7 +347,7 @@ func (s *Service) work(ctx context.Context, j job) (string, error) {
 // withMessages returns the job's task with, in front of it, anything other
 // agents asked this one while it was busy. They are handed over once.
 func (s *Service) withMessages(ctx context.Context, j job) string {
-	messages, err := s.agents.TakeMessages(ctx, j.agent.ID)
+	messages, err := s.agents.TakeMessages(ctx, j.agent.ID, false)
 	if err != nil || len(messages) == 0 {
 		return j.task
 	}
@@ -368,7 +415,7 @@ func (s *Service) AskAgent(ctx context.Context, ownerID, fromMachine, fromAgent,
 	}
 	var target *store.Agent
 	for _, a := range agents {
-		if a.MachineName == toMachine && a.Name == toAgent {
+		if a.MachineName == toMachine && (a.Name == toAgent || a.Handle == toAgent) {
 			target = a
 			break
 		}
@@ -376,7 +423,7 @@ func (s *Service) AskAgent(ctx context.Context, ownerID, fromMachine, fromAgent,
 	if target == nil {
 		var known []string
 		for _, a := range agents {
-			known = append(known, fmt.Sprintf("%s on %s", a.Name, a.MachineName))
+			known = append(known, fmt.Sprintf("%s (%s) on %s", a.Handle, a.Name, a.MachineName))
 		}
 		return "", Mistake(fmt.Sprintf("There is no agent called %q on %q. The agents there are: %s.", toAgent, toMachine, strings.Join(known, ", ")))
 	}
@@ -424,6 +471,7 @@ func (s *Service) AskAgent(ctx context.Context, ownerID, fromMachine, fromAgent,
 		agent:   target,
 		task:    task,
 	})
+	s.followUp(ownerID, target.ChatID, target)
 	if err != nil {
 		exchange.Failed, exchange.Answer = true, err.Error()
 		s.append(context.WithoutCancel(ctx), target.ChatID, KindMessage, exchange)
@@ -439,24 +487,7 @@ func (s *Service) AskAgent(ctx context.Context, ownerID, fromMachine, fromAgent,
 // mayAsk reports whether the user's agents may ask each other another
 // question now, and counts it if so.
 func (s *Service) mayAsk(ownerID string) bool {
-	now := time.Now()
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	recent := s.asked[ownerID][:0]
-	for _, at := range s.asked[ownerID] {
-		if now.Sub(at) < askWindow {
-			recent = append(recent, at)
-		}
-	}
-	if len(recent) >= askLimit {
-		s.asked[ownerID] = recent
-		return false
-	}
-	s.asked[ownerID] = append(recent, now)
-
-	return true
+	return s.allow(ownerID, askLimit, askWindow)
 }
 
 // finished tells a chat that one of its background agents is done, and sets
@@ -467,6 +498,7 @@ func (s *Service) finished(j job, report string, err error) {
 	payload := AgentPayload{
 		AgentID:    j.agent.ID,
 		Agent:      j.agent.Name,
+		Handle:     j.agent.Handle,
 		ToolCallID: j.callID,
 		Machine:    j.machine,
 		Content:    truncate(report, maxToolOutput),
@@ -529,7 +561,7 @@ func (s *Service) wake(ctx context.Context, ownerID, chatID string) {
 
 // describeAgent says in a line what an agent is doing, for the model.
 func describeAgent(a *store.Agent, now time.Time) string {
-	line := fmt.Sprintf("- %q on %s: %s", a.Name, a.MachineName, a.Status)
+	line := fmt.Sprintf("- %q (@%s) on %s: %s", a.Name, a.Handle, a.MachineName, a.Status)
 
 	switch a.Status {
 	case AgentWorking:

@@ -43,9 +43,11 @@ func (s *Service) dispatch(ctx context.Context, ownerID, chatID string, call Too
 		Agent   string `json:"agent"`
 		Task    string `json:"task"`
 		// Background asks for the task to be started and not waited for.
-		Background bool   `json:"background"`
-		Port       int    `json:"port"`
-		Label      string `json:"label"`
+		Background bool `json:"background"`
+		// Files are the IDs of files in the chat to give the agent.
+		Files []string `json:"files"`
+		Port  int      `json:"port"`
+		Label string   `json:"label"`
 	}
 	// A design is an object of its own shape, read where it is used.
 	isDesign := call.Function.Name == toolUpdateArchitecture
@@ -120,7 +122,16 @@ func (s *Service) dispatch(ctx context.Context, ownerID, chatID string, call Too
 			return "", nil, err
 		}
 
-		report, err := s.assign(ctx, ownerID, chatID, call.ID, m, strings.TrimSpace(args.Agent), args.Task, args.Background)
+		files, where, err := s.taskFiles(ctx, ownerID, chatID, args.Files)
+		if err != nil {
+			return "", nil, err
+		}
+		task := args.Task
+		if where != "" {
+			task += "\n\n" + where
+		}
+
+		report, err := s.assign(ctx, ownerID, chatID, call.ID, m, strings.TrimSpace(args.Agent), task, files, args.Background)
 		if err != nil {
 			return "", nil, err
 		}

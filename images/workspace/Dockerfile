@@ -9,6 +9,10 @@
 #
 # or all of them with `make images`. The stacks are: base (Python and
 # Node.js), go, cpp, dotnet and data (PostgreSQL and Redis).
+#
+# The link daemon is not built here. `make link` builds it on the host, as a
+# static binary, and leaves it at images/workspace/bin/linkd for this file to
+# copy in; `make image` and `make images` do that first.
 
 # Which stack to build. Declared before the first FROM so that the last
 # stage can choose what it is built on.
@@ -23,6 +27,7 @@ RUN go mod download
 COPY cmd/guestd ./cmd/guestd
 COPY internal/guest ./internal/guest
 COPY internal/guestapi ./internal/guestapi
+COPY internal/linkapi ./internal/linkapi
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/guestd ./cmd/guestd
 
 # ---------- what every machine has
@@ -164,6 +169,10 @@ FROM stack-${STACK}
 
 COPY --from=guestd /out/guestd /usr/local/bin/guestd
 
+# The link daemon: the machine's end of the distributed harness, kept
+# running by guestd. Built by `make link`.
+COPY --chmod=0755 images/workspace/bin/linkd /usr/local/bin/linkd
+
 USER coder
 WORKDIR /home/coder
 
@@ -185,6 +194,6 @@ RUN mkdir -p /home/coder/.local/share/code-server/User \
         > /home/coder/.local/share/code-server/User/settings.json
 
 # The guest daemon is the machine's main process: it connects to the control
-# plane, runs the user's terminals, and keeps the editor and the coding agent
-# running.
+# plane, runs the user's terminals, and keeps the editor, the coding agent
+# and the link daemon running.
 CMD ["guestd"]

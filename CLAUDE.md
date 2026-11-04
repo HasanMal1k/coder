@@ -3,14 +3,21 @@
 A cloud development platform: each user has persistent Linux machines with a
 terminal and VS Code in the browser, and an AI assistant that designs an
 application with them and builds it across those machines. A Go backend
-(`cmd/`, `internal/`), a Next.js frontend (`web/`), machines as local Docker
-containers. A portfolio project, built to production standard.
+(`cmd/`, `internal/`), a Next.js frontend (`web/`), a small Rust daemon that
+runs on every machine (`link/`), machines as local Docker containers. A commercial product the owner intends to sell, not a portfolio
+piece. Its two ideas: people build software without owning the compute it
+needs, and a distributed harness (a parent assistant in the control plane,
+and a coding agent with its own harness on every machine).
 
 ## Read first
 
 - [docs/STATUS.md](docs/STATUS.md): where things stand. What was done last,
   what is known to be wrong, how changes were tested, what to do next.
   **Start here, and update it at the end of the session.**
+- [docs/MVP.md](docs/MVP.md): what the product is, who it is for, and what
+  the first version to sell must do. The target the work is aimed at.
+- [docs/HARNESS.md](docs/HARNESS.md): the design of the distributed harness,
+  and how far it has been built. The work in progress.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): the design in overview.
 - [docs/BACKEND.md](docs/BACKEND.md): the backend in detail. Long; read the
   section you need (it has a table of contents, and section 24 says where to
@@ -23,12 +30,23 @@ containers. A portfolio project, built to production standard.
 
 ```bash
 make db        # Postgres and migrations
-make run       # the server, :8080
+make run       # the server, :8080, and :8081 for machines' links
 make web       # the frontend, http://coder.localhost:3000 (use this address, not localhost)
-make test      # Go tests, with the race detector
+make test      # Go tests with the race detector, and the Rust daemon's
+make link      # the link daemon (Rust), built here for the machine image
+make standin   # a stand-in for the model, on :9099 (tools/standin)
+make run-standin   # the server pointed at the stand-in, in place of `make run`
 make image     # the machine image; `make images` for every stack
-make proto     # after editing internal/guestapi/guest.proto
+make proto     # after editing guest.proto or internal/linkapi/link.proto
 ```
+
+The end-to-end check, with `make standin`, `make run-standin` and `make web`
+running: `node tools/uicheck/build.mjs` builds a whole project in a real
+browser on real machines, and removes them afterwards. It takes about six
+minutes, and refuses to run against anything but the stand-in.
+
+Rust checks, from `link/`: `cargo fmt --check`,
+`cargo clippy --all-targets -- -D warnings`, `cargo test`.
 
 Frontend checks, from `web/`:
 
@@ -47,14 +65,15 @@ These are the owner's, given over several sessions.
   as a stand-in for the model) lives apart from the product's packages and
   is never part of its build.
 - **Dependency rule.** Transports (`httpapi`, `wsgateway`, `portproxy`,
-  `llmgateway`, `teamapi`) call the domain (`auth`, `instance`, `assistant`),
-  which calls infrastructure (`sandbox`, `tunnel`, `store`). Domain packages
-  never import transport types.
+  `llmgateway`, `teamapi`, `linkgw`) call the domain (`auth`, `instance`,
+  `assistant`), which calls infrastructure (`sandbox`, `tunnel`, `link`,
+  `store`). Domain packages never import transport types.
 - **Commit only when asked.**
 - **Verify for real.** Run the thing and look, in a browser where it is a
   page. Say what was checked and what was not.
 - **Do not call the real model to test without asking.** It spends the
   owner's credits. Listing a key's models is free. Never print the key.
+  Test against the stand-in (`tools/standin`).
 - **The model's key never goes into a machine.** Agents reach the model
   through the gateway, as the machine.
 - **Test accounts** are named `tmpcheck-<something>@example.com` and are
@@ -95,14 +114,42 @@ Not to be reopened without the owner raising them.
   checks for it and the Backend tab is drawn from it.
 - The model is DeepSeek, through its OpenAI-compatible API. Talking to it
   stays in the Go server, not in a separate service.
-- A Fly.io provider is wanted and deferred for lack of funds. Docker on one
-  host is what runs today.
+- Docker on one host is what runs today. For testing on real hardware, and
+  for the wall between users, machines are to run on Fly.io (the owner,
+  2026-10-18: the cheapest dedicated server was too dear to test on). Fly's
+  machines are small virtual machines billed by the second. A rented server
+  (2026-10-12's plan, [docs/MVP.md](docs/MVP.md#isolation-cheaply)) is for
+  when Fly's memory price outweighs that; `sandbox.Provisioner` keeps the
+  move contained. gVisor is dropped.
+- The coding agent (2026-10-18): OpenCode is to be replaced by DeepSeek
+  Harness (`dsh`, MIT), driven over ACP, the Agent Client Protocol, so that
+  the harness is a setting and not a rewrite. No harness of our own is to be
+  written. The context window and longest reply are the model's own.
+- The distributed harness (2026-10-12, [docs/HARNESS.md](docs/HARNESS.md)):
+  Rust is for communication only;
+  machines talk to each other directly, not through the control plane; and
+  a machine's agent has the say on its own component, with the parent
+  listening to it.
+- Docker is left out wherever it is a choice (2026-10-12, for the memory it
+  takes on the owner's computer). The link daemon is built on the host with
+  Cargo, not in a stage of the machine image. Machines themselves are still
+  containers; when checking something, start as few as will show it.
 
 ## Things that catch people out
 
-- A machine keeps the `guestd` and tools of the image it was created from.
-  After changing `internal/guest` or the image, rebuild (`make images`) and
-  create new machines to see the change.
+- A machine keeps the `guestd`, `linkd` and tools of the image it was
+  created from. After changing `internal/guest`, `link/` or the image,
+  rebuild (`make images`) and create new machines to see the change.
+- `make image` builds the link daemon first, on this computer, which needs
+  Rust with the musl target (`rustup target add x86_64-unknown-linux-musl`)
+  and `protoc`. The built daemon is at `images/workspace/bin/linkd`, which
+  git ignores.
+- `link.proto` has two readers. `make proto` regenerates the Go side; the
+  Rust side is regenerated whenever `linkd` is built. Change both ends'
+  handling of a frame together.
+- A machine started through the API with the app closed is stopped at the
+  next idle check. Start the server with `IDLE_STOP_AFTER=0` when checking
+  something on a machine without a browser open.
 - The assistant can only build a design whose stack images exist on the
   server (`make images`).
 - Open the frontend at `coder.localhost:3000`. The editor is framed from

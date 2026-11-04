@@ -133,7 +133,7 @@ function AgentRow({
 
   return (
     <li
-      aria-label={`${agent.name} on ${agent.machine.name}`}
+      aria-label={`${agent.handle} (${agent.name}) on ${agent.machine.name}`}
       className={cn("flex items-start gap-3 px-4 py-3", !working && "text-muted-foreground")}
     >
       <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center">
@@ -142,8 +142,8 @@ function AgentRow({
 
       <div className="min-w-0 flex-1">
         <p className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm">
-          <span className={cn("font-medium", working && "text-foreground")}>{agent.name}</span>
-          <span className="text-muted-foreground">on</span>
+          <span className={cn("font-medium", working && "text-foreground")}>{agent.handle}</span>
+          <span className="text-muted-foreground">{agent.name} on</span>
           <Link
             href={`/instances/${agent.machine.id}`}
             className="font-mono text-[13px] text-foreground underline-offset-4 hover:underline"
@@ -194,7 +194,7 @@ function AgentRow({
               <Button
                 variant="ghost"
                 size="icon-sm"
-                aria-label={`Open the chat that started ${agent.name}`}
+                aria-label={`Open the chat that started ${agent.handle}`}
                 onClick={onOpenChat}
               >
                 <MessageSquareIcon />
@@ -204,7 +204,7 @@ function AgentRow({
           </Tooltip>
         )}
         {working && (
-          <Button variant="outline" size="sm" aria-label={`Stop ${agent.name}`} onClick={onStop}>
+          <Button variant="outline" size="sm" aria-label={`Stop ${agent.handle}`} onClick={onStop}>
             <SquareIcon className="fill-current" data-icon="inline-start" />
             Stop
           </Button>

@@ -17,6 +17,14 @@ import (
 // really is gets decided by the control plane, not here.
 const agentModel = "assistant"
 
+// The limits the agent works within when the control plane didn't say what
+// the model's are: cautious, so that a long session is summarised before
+// any model would refuse it.
+const (
+	fallbackContext = 64000
+	fallbackOutput  = 8192
+)
+
 // RunAgent keeps the coding agent (OpenCode, as a server) running until ctx
 // is cancelled, restarting it with backoff if it exits. If it isn't installed
 // it returns immediately.
@@ -75,6 +83,13 @@ func agentConfig(cfg Config) (string, error) {
 	const provider = "coder"
 	model := provider + "/" + agentModel
 
+	// The model's own limits. With less room than the model has, the agent
+	// summarises its session part-way through a task and forgets its work.
+	window, output := cfg.ModelContext, cfg.ModelOutput
+	if window <= 0 || output <= 0 || output >= window {
+		window, output = fallbackContext, fallbackOutput
+	}
+
 	config := map[string]any{
 		"$schema":     "https://opencode.ai/config.json",
 		"model":       model,
@@ -103,10 +118,8 @@ func agentConfig(cfg Config) (string, error) {
 				},
 				"models": map[string]any{
 					agentModel: map[string]any{
-						"name": "Assistant",
-						// A conservative size, so the agent summarises a
-						// long session before the model would refuse it.
-						"limit": map[string]int{"context": 64000, "output": 8192},
+						"name":  "Assistant",
+						"limit": map[string]int{"context": window, "output": output},
 					},
 				},
 			},

@@ -7,15 +7,18 @@ them and builds it across those machines.
 
 This is the overview and the roadmap. [STATUS.md](STATUS.md) says where the
 work stands today and what is known to be wrong; [BACKEND.md](BACKEND.md)
-explains how the backend works in detail; [API.md](API.md) is the API.
+explains how the backend works in detail; [API.md](API.md) is the API;
+[HARNESS.md](HARNESS.md) is the design for how the assistant and the agents
+on machines are to work together, most of which is not built yet.
 
 **Built so far:** auth, instance lifecycle, the guest daemon, the tunnel, the
 browser terminal, an embedded editor (VS Code) served through a port proxy,
 automatic stopping of machines nobody is connected to, an AI assistant that
 designs first and then creates machines and directs coding agents inside
-them, services the machines keep running, and a web frontend that is a chat
-with a panel showing what is being built. Machines run as local Docker
-containers.
+them, services the machines keep running, a web frontend that is a chat
+with a panel showing what is being built, and the first piece of the
+distributed harness: a link from every machine to the control plane.
+Machines run as local Docker containers.
 **Not built yet:** everything under [Planned](#planned).
 
 ## Overview
@@ -42,9 +45,11 @@ Browser ─────HTTPS───►  httpapi      REST: auth, instances, ch
                      └───────────────────────────────────────────────────┘
 ```
 
-Not drawn: `portproxy`, which serves machines' ports to the browser, and the
+Not drawn: `portproxy`, which serves machines' ports to the browser; the
 assistant with what serves its agents (`llmgateway`, `teamapi`), which has
-[a section of its own](#the-assistant).
+[a section of its own](#the-assistant); and `linkd`, a second daemon on each
+machine with a connection of its own to the control plane, which has
+[one too](#the-link).
 
 Two ideas carry the design:
 
@@ -80,6 +85,12 @@ The app is a chat. Each chat is one thing being built.
   backend is made to serve, with a form to call each operation.
 - **Dashboard**: the chat's machines and agents, and how each stands.
 
+A chat is shared, like a channel: the user, the assistant (which runs the
+project) and the agents it has set to work, each agent with a name of its
+own ("tom") and the logo of what it builds as its picture. Writing `@tom`
+sends a message straight to that agent; agents write back, show mockups and
+ask the user to choose. Images and files can be attached, pasted or dropped.
+
 A machine also has a page of its own (editor, terminal, overview), and a list
 of all machines is in the account menu. [web/README.md](../web/README.md)
 describes the frontend.
@@ -90,6 +101,7 @@ describes the frontend.
 |---|---|
 | `cmd/server` | Wires everything together; graceful shutdown. |
 | `cmd/guestd` | Guest daemon, baked into the machine image. |
+| `link` | `linkd`, the link daemon, also in every machine: a machine's end of the distributed harness. Rust, a Cargo project of its own. |
 | `internal/auth` | Users, passwords, access tokens. |
 | `internal/config` | Reads the environment and `.env`. |
 | `internal/instance` | Instance state machine, ownership checks, guest credentials, and making one HTTP request to a port inside a machine for its owner. |
@@ -105,14 +117,18 @@ describes the frontend.
 | `internal/portproxy` | Serves ports inside machines (the editor, dev servers) to the browser, each on its own origin. |
 | `internal/llmgateway` | Lets the coding agents in machines use the model without holding its API key. |
 | `internal/teamapi` | What machines ask the control plane: an MCP server their agents use (to look each other up, ask each other, leave notes, register services), and the record each machine keeps a copy of. |
+| `internal/linkapi` | Protocol between control plane and `linkd` (gRPC, defined in `link.proto`). |
+| `internal/link` | Tracks which machines have a link attached, and sends frames to them. |
+| `internal/linkgw` | The gRPC server machines' link daemons connect to. |
 | `internal/middleware` | HTTP auth middleware. |
 | `internal/store` | Postgres repositories. No business logic. |
 | `images/workspace` | Dockerfile for the machine images: one per stack (base, Go, C++, .NET, data), all with Ubuntu, dev tools, Python, Node.js, code-server, OpenCode and `guestd`. |
 | `web` | Frontend: Next.js, talking to the API from the browser. A chat, with a panel of four tabs beside it. |
 
 Dependency rule: transports (`httpapi`, `wsgateway`, `portproxy`,
-`llmgateway`, `teamapi`) → domain (`auth`, `instance`, `assistant`) → infrastructure
-(`sandbox`, `tunnel`, `store`). Domain packages never import transport types.
+`llmgateway`, `teamapi`, `linkgw`) → domain (`auth`, `instance`, `assistant`) →
+infrastructure (`sandbox`, `tunnel`, `link`, `store`). Domain packages never
+import transport types.
 
 ## The tunnel
 
@@ -180,6 +196,34 @@ environment variable; Postgres stores only its SHA-256. A database leak
 therefore doesn't let anyone impersonate a machine. `guestd` strips the token
 from the environment of the shells it starts.
 
+## The link
+
+Every machine runs a second small daemon, `linkd`, kept up by `guestd`. It
+opens one gRPC stream to the control plane and keeps it open, dialling again
+whenever it drops; either end can speak on it at any time.
+
+```
+linkd (Rust, in the machine) ── gRPC over HTTP/2, one stream ──► linkgw :8081 ──► link.Hub
+```
+
+- It attaches as the machine, with the machine's guest token, and only once
+  it has answered a ping is it counted as attached.
+- Both ends ping a quiet stream, so a machine or a server that vanished is
+  noticed within half a minute.
+- It is small on purpose: a static binary of about 1 MB, using under 1 MB
+  of memory on one thread.
+
+Machines that an approved design connects also open a stream to each other,
+directly across their owner's private network. The control plane tells each
+who its peers are and gives them a key; they prove themselves to each other
+with it and report back which peers they are linked to.
+
+Today the links only connect. They are the first steps of the distributed
+harness, in which agents on different machines settle what passes between
+their components before building and follow each other's progress while
+they build: [HARNESS.md](HARNESS.md) is that design, and
+[BACKEND.md, section 25](BACKEND.md#25-the-link) is how the link works.
+
 ## The assistant
 
 A chat in which the user says what they want ("a backend on one machine and
@@ -200,7 +244,9 @@ Browser ── chat ──► assistant (control plane) ── a task, over the 
   an approved design. It cannot delete a machine.
 - **Coding agents** ([OpenCode](https://opencode.ai)) run in every machine,
   kept up by `guestd`. They write the files and run the commands. Each gets
-  a task in words and returns a report in words.
+  a task in words and returns a report in words. OpenCode is to be replaced
+  by DeepSeek Harness, driven over ACP (decided 2026-10-18;
+  [STATUS.md](STATUS.md#agents-at-once-and-doing-the-whole-job-2026-10-18)).
 
 What follows from that split:
 
@@ -216,6 +262,13 @@ What follows from that split:
 - **Its replies are shown as they are written.** The model's answer is read
   as a stream; what it has written so far is held in memory and offered to
   whoever is watching the chat, and only the finished message is stored.
+- **The user can talk to agents directly.** Each agent has a name of its
+  own, given by the platform. A message that names agents (`@tom`) is given
+  to them as a task, and each answer is posted in the chat; the assistant
+  reads both but is not run. Agents also post in the chat, and ask the user
+  to decide things, through two tools on the team's MCP server. Files the
+  user attaches are read by the assistant where they are text, and put on a
+  machine when they go with a task.
 - **Agents work like processes.** Each has a name and a state, several can
   work on one machine at once, and they can be listed and stopped, by the
   assistant or by the user. The assistant can wait for an agent's report or
@@ -328,8 +381,12 @@ chats (id, owner_id → users ON DELETE CASCADE, title,
        created_at, updated_at)
 
 chat_events (chat_id → chats ON DELETE CASCADE, seq,   -- PRIMARY KEY (chat_id, seq)
-             kind,                   -- CHECK: 'user' | 'assistant' | 'tool' | 'activity' | 'agent' | 'message' | 'error'
+             kind,                   -- CHECK: 'user' | 'assistant' | 'tool' | 'activity' | 'agent' | 'message' | 'post' | 'error'
              payload JSONB, created_at)
+
+-- files put in chats, by the user or by agents; at most 10 MB each
+attachments (id, owner_id → users, chat_id → chats,   -- both ON DELETE CASCADE
+             name, content_type, size, data BYTEA, created_at)
 
 -- the design of what a chat is building; one per chat
 architectures (chat_id → chats ON DELETE CASCADE, owner_id → users,
@@ -342,8 +399,9 @@ services (instance_id → instances ON DELETE CASCADE, name, command, directory,
           updated_at)                -- set on every registration; it is the service's revision
                                      -- PRIMARY KEY (instance_id, name)
 
--- questions left for an agent that was busy
-agent_messages (id, to_agent_id → agents ON DELETE CASCADE, from_machine, from_agent, body, created_at, delivered_at)
+-- questions left for an agent that was busy, and what the user wrote to one
+agent_messages (id, to_agent_id → agents ON DELETE CASCADE, from_machine, from_agent,
+                from_owner, body, attachments UUID[], chat_seq, created_at, delivered_at)
 
 -- every task an agent was given: what it did, step by step, and its report
 agent_tasks (id, agent_id → agents ON DELETE CASCADE, task, background,
@@ -355,7 +413,8 @@ agent_notes (id, owner_id → users ON DELETE CASCADE, machine, author, topic, b
 
 -- coding agents: a named worker on a machine, belonging to a chat
 agents (id, owner_id → users, chat_id → chats, instance_id → instances,   -- all ON DELETE CASCADE
-        name,                        -- UNIQUE (chat_id, instance_id, name)
+        name,                        -- its job; UNIQUE (chat_id, instance_id, name)
+        handle,                      -- its own name ("tom"); UNIQUE (owner_id, handle)
         status,                      -- CHECK: 'idle' | 'working' | 'failed' | 'stopped'
         session_id,                  -- OpenCode's conversation, its memory
         task, background, activity, report, started_at, finished_at, created_at, updated_at)
@@ -378,19 +437,37 @@ wrong; [STATUS.md](STATUS.md#open-issues) has it in full.
    browser) and a choice of model.
 4. **Keeping a long chat within what the model accepts**: summarising or
    trimming history, and trying a failed request to the model again.
-5. **Tests in the repository for the whole flow**: a stand-in for the model
-   and a browser script, kept apart from the product's build.
-6. **Fly.io provider** (`sandbox/fly`): machines as Fly Machines (Firecracker
-   microVMs), one Fly app per user on its own private network. Notes:
-   - Only volumes persist on Fly; the root filesystem resets on every start.
+5. **The distributed harness** ([HARNESS.md](HARNESS.md)): a small Rust
+   program on every machine, with streams to the control plane and directly
+   to the owner's other machines. Agents settle what passes between their
+   components before any code is written, and follow each other's progress
+   while they build. Two steps are done: tests in the repository for the
+   whole flow (`tools/standin` and `tools/uicheck/build.mjs`), and the
+   connections themselves: every machine linked to the control plane, and
+   to the machines it works with ([above](#the-link)).
+6. **Machines as small virtual machines**: each with its own kernel, which
+   is the wall between users that a container with root is not.
+
+   **A Fly.io provider** (`sandbox/fly`) is the plan again, since
+   2026-10-18, first for testing on real hardware: machines as Fly Machines
+   (Firecracker microVMs, billed by the second), one Fly app per user on its
+   own private network. A rented server (the plan of 2026-10-12,
+   [MVP.md](MVP.md#isolation-cheaply)) is for when Fly's memory price
+   outweighs it; Kata Containers there would keep the change inside
+   `sandbox/docker`. Either way a machine's memory and processors become
+   changeable after it is made: stop, change, start. Notes for Fly:
+   - Only volumes persist on Fly by default; the root filesystem resets on
+     every start unless the machine is made with `persist_rootfs`, which
+     Fly says is not fully reliable.
      Bake common toolchains into the image and steer per-user installs into
      the home directory, or later have `guestd` overlay the root filesystem
      onto the volume.
    - Stopped machines cost only storage, which is what makes stopping idle
      machines (already built) worth having there.
    - `GUEST_CONNECT_URL` becomes the control plane's public `wss://` address.
-   - It is also the answer to isolation: a container with root is not a
-     boundary between users who do not trust each other.
+   - Memory there costs roughly eight to ten times a rented server's while
+     a machine runs, and a stopped machine's disk and volumes are still
+     paid for.
 7. **Reconciler**: periodically compare Postgres with the provider and fix
    drift (machines deleted outside the platform, machines with no row,
    instances left in a transitional status).
@@ -421,8 +498,8 @@ The lasting ones, by design or by omission. Bugs waiting to be fixed are in
   finds a control plane started with `make run`; it also reaches anything
   else the host publishes on all interfaces.
 - Machines come in three sizes and three disk sizes, chosen at creation and
-  fixed afterwards. On local Docker the disk size is recorded but not
-  enforced.
+  fixed afterwards, which the owner wants changed (Planned, 6). On local
+  Docker the disk size is recorded but not enforced.
 - If the server dies between creating a machine and saving its ID, that
   machine is orphaned until the reconciler exists. Its labels identify it.
 - No limit on how many instances a user can create, or on sign-ups.
@@ -434,13 +511,20 @@ The lasting ones, by design or by omission. Bugs waiting to be fixed are in
   that machine: read its owner's team record and register services on it.
 - A port session, once issued, lasts its 12 hours even if the user signs out
   or the instance changes hands; it is not checked against the database.
-- Used tickets, who is connected, runs in progress and what machines report
-  are remembered in memory, which is only correct with a single server
-  process.
+- Used tickets, who is connected, which machines have a link attached, runs
+  in progress and what machines report are remembered in memory, which is
+  only correct with a single server process.
+- The link is not encrypted by `linkd` itself, which cannot yet dial a
+  server over TLS. That is fine across the Docker bridge to the host, and
+  has to be dealt with before machines run anywhere else.
 - The whole of a chat is sent to the model at every step, and nothing
   shortens it.
 - Every user's assistant spends the server's one model key, without limits
   or accounting.
-- The assistant's mechanics have been tested end to end with a stand-in for
-  the model. With the real model it has had one chat; how well a real model
-  follows its instructions is only seen in use.
+- The assistant's mechanics are tested end to end with a stand-in for the
+  model (`tools/standin`, driven by `tools/uicheck/build.mjs`). With the
+  real model it has had one chat; how well a real model follows its
+  instructions is only seen in use.
+- The coding agent takes most of a small machine's memory: several hundred
+  megabytes at rest and up to 900 MB at work, of 1 GB
+  ([HARNESS.md](HARNESS.md#what-was-measured)).

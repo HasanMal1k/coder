@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"net/http"
 	"strconv"
 	"time"
@@ -69,6 +70,20 @@ type DraftResponse struct {
 
 type SendMessageRequest struct {
 	Text string `json:"text"`
+	// To names who the message is for, by handle ("tom", "assistant").
+	// Left out, it is whoever the text mentions with an @, or the assistant.
+	To []string `json:"to,omitempty"`
+	// Attachments are the IDs of files uploaded to the chat for it.
+	Attachments []string `json:"attachments,omitempty"`
+}
+
+// AttachmentResponse describes a file uploaded to a chat.
+type AttachmentResponse struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	ContentType string    `json:"content_type"`
+	Size        int       `json:"size"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 func NewChatHandler(svc *assistant.Service, model string) *ChatHandler {
@@ -189,12 +204,97 @@ func (h *ChatHandler) Send(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.svc.Send(r.Context(), user.ID, chi.URLParam(r, "id"), req.Text); err != nil {
+	msg := assistant.UserMessage{Text: req.Text, To: req.To, Attachments: req.Attachments}
+	if err := h.svc.SendMessage(r.Context(), user.ID, chi.URLParam(r, "id"), msg); err != nil {
 		writeChatError(w, r, err)
 		return
 	}
 
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// Upload stores a file to send in a chat: the request is a multipart form
+// with the file in the field "file". The file is sent by giving its ID with
+// a message.
+func (h *ChatHandler) Upload(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.UserFromContext(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "not authenticated"})
+		return
+	}
+
+	// The form's own fields and boundaries take a little room besides the
+	// file.
+	r.Body = http.MaxBytesReader(w, r.Body, assistant.MaxAttachmentSize+64<<10)
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, ErrorResponse{Error: fmt.Sprintf("a file can be at most %d MB", assistant.MaxAttachmentSize>>20)})
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: `the request must be a multipart form with the file in "file"`})
+		return
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(io.LimitReader(file, assistant.MaxAttachmentSize+1))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "could not read the file"})
+		return
+	}
+
+	a, err := h.svc.UploadAttachment(r.Context(), user.ID, chi.URLParam(r, "id"), header.Filename, data)
+	if err != nil {
+		writeChatError(w, r, err)
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, AttachmentResponse{
+		ID: a.ID, Name: a.Name, ContentType: a.ContentType, Size: a.Size, CreatedAt: a.CreatedAt,
+	})
+}
+
+// shownInline are the types a browser is let show as they are. Anything
+// else is sent as a download, so that nothing in a chat can run as a page of
+// this site.
+var shownInline = map[string]bool{
+	"image/png":  true,
+	"image/jpeg": true,
+	"image/gif":  true,
+	"image/webp": true,
+}
+
+// Attachment sends one of a chat's files.
+func (h *ChatHandler) Attachment(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.UserFromContext(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "not authenticated"})
+		return
+	}
+
+	a, err := h.svc.Attachment(r.Context(), user.ID, chi.URLParam(r, "id"), chi.URLParam(r, "attachment"))
+	if err != nil {
+		writeChatError(w, r, err)
+		return
+	}
+
+	// An SVG among the rest: the app shows it as a picture, which runs
+	// nothing in it, but opened by itself it is a document that can.
+	disposition := "attachment"
+	if shownInline[a.ContentType] {
+		disposition = "inline"
+	}
+
+	w.Header().Set("Content-Type", a.ContentType)
+	w.Header().Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": a.Name}))
+	w.Header().Set("Content-Length", strconv.Itoa(len(a.Data)))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
+	// A file never changes once uploaded.
+	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	w.WriteHeader(http.StatusOK)
+	w.Write(a.Data)
 }
 
 // Cancel stops the assistant, or withdraws the question it was waiting on.
@@ -430,7 +530,13 @@ func writeChatError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, assistant.ErrBusy):
 		writeJSON(w, http.StatusConflict, ErrorResponse{Error: "the assistant is still working on your last message"})
 	case errors.Is(err, assistant.ErrInvalidMessage):
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "message must be between 1 and 20000 characters"})
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "a message needs words or a file, at most 20000 characters and 10 files"})
+	case errors.Is(err, assistant.ErrAttachmentNotFound):
+		writeJSON(w, http.StatusNotFound, ErrorResponse{Error: "file not found"})
+	case errors.Is(err, assistant.ErrInvalidAttachment):
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: fmt.Sprintf("a file must not be empty, and can be at most %d MB", assistant.MaxAttachmentSize>>20)})
+	case errors.Is(err, assistant.ErrUnknownRecipient):
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: err.Error()})
 	case errors.Is(err, assistant.ErrDisabled):
 		writeJSON(w, http.StatusServiceUnavailable, ErrorResponse{Error: "the assistant is not set up on this server"})
 	default:

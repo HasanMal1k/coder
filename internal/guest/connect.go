@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/coder/websocket"
@@ -15,6 +16,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/HasanMal1k/coder/internal/guestapi"
+	"github.com/HasanMal1k/coder/internal/linkapi"
 )
 
 const (
@@ -31,6 +33,13 @@ type Config struct {
 	ConnectURL string
 	InstanceID string
 	Token      string
+	// LinkURL is where the link daemon dials the control plane. It is empty
+	// on a machine created before links existed.
+	LinkURL string
+	// ModelContext and ModelOutput are the model's limits in tokens, for the
+	// coding agent. Zero on a machine created before they were passed on.
+	ModelContext int
+	ModelOutput  int
 }
 
 // ConfigFromEnv reads the variables the control plane sets on every machine.
@@ -39,6 +48,7 @@ func ConfigFromEnv() (Config, error) {
 		ConnectURL: os.Getenv(guestapi.EnvConnectURL),
 		InstanceID: os.Getenv(guestapi.EnvInstanceID),
 		Token:      os.Getenv(guestapi.EnvGuestToken),
+		LinkURL:    os.Getenv(linkapi.EnvLinkURL),
 	}
 
 	if cfg.ConnectURL == "" {
@@ -50,6 +60,11 @@ func ConfigFromEnv() (Config, error) {
 	if cfg.Token == "" {
 		return Config{}, errors.New(guestapi.EnvGuestToken + " is required")
 	}
+
+	// Optional, and a bad value is the same as none: the agent then works
+	// with cautious limits rather than not at all.
+	cfg.ModelContext, _ = strconv.Atoi(os.Getenv(guestapi.EnvModelContext))
+	cfg.ModelOutput, _ = strconv.Atoi(os.Getenv(guestapi.EnvModelOutput))
 
 	return cfg, nil
 }
@@ -112,7 +127,8 @@ func ServeConn(ctx context.Context, conn net.Conn, srv *Server) error {
 	}
 	defer session.Close()
 
-	grpcServer := grpc.NewServer()
+	// Large enough for a file (PutFile, GetFile) in one message.
+	grpcServer := grpc.NewServer(grpc.MaxRecvMsgSize(guestapi.MaxMessageSize), grpc.MaxSendMsgSize(guestapi.MaxMessageSize))
 	guestapi.RegisterGuestServer(grpcServer, srv)
 	// Stop, not GracefulStop: once the tunnel is gone nobody is listening to
 	// the terminals on it.

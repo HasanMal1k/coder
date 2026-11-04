@@ -83,6 +83,47 @@ func TestStreamedReplyIsAssembled(t *testing.T) {
 	}
 }
 
+func TestReasoningIsKeptApartFromTheText(t *testing.T) {
+	var request struct {
+		Messages []map[string]any `json:"messages"`
+	}
+
+	llm := modelServer(t, func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&request)
+		stream(w,
+			`data: {"choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"The user "},"finish_reason":null}]}`,
+			`data: {"choices":[{"index":0,"delta":{"reasoning_content":"wants a list."},"finish_reason":null}]}`,
+			`data: {"choices":[{"index":0,"delta":{"content":"Here it is."},"finish_reason":null}]}`,
+			`data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+			`data: [DONE]`,
+		)
+	})
+
+	var shown []string
+	history := []Message{
+		{Role: "user", Content: "hi"},
+		{Role: "assistant", ReasoningContent: "Earlier thinking.", ToolCalls: []ToolCall{{ID: "c1", Type: "function", Function: FunctionCall{Name: toolListMachines, Arguments: "{}"}}}},
+		{Role: "tool", ToolCallID: "c1", Content: "none"},
+	}
+	msg, err := llm.Complete(context.Background(), history, toolDefs, func(piece string) { shown = append(shown, piece) })
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	if msg.Content != "Here it is." || msg.ReasoningContent != "The user wants a list." {
+		t.Errorf("message = %+v", msg)
+	}
+	if !equal(shown, []string{"Here it is."}) {
+		t.Errorf("shown = %q; the reasoning is not part of what the person sees", shown)
+	}
+	if len(request.Messages) != 3 || request.Messages[1]["reasoning_content"] != "Earlier thinking." {
+		t.Errorf("sent %v; earlier reasoning must go back to the model", request.Messages)
+	}
+	if _, ok := request.Messages[0]["reasoning_content"]; ok {
+		t.Error("a message with no reasoning was sent an empty one")
+	}
+}
+
 func TestAReplyCutOffIsAnErrorNotAHalfMessage(t *testing.T) {
 	llm := modelServer(t, func(w http.ResponseWriter, r *http.Request) {
 		stream(w,

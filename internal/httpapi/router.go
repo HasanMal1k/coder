@@ -92,6 +92,8 @@ func NewRouter(deps Deps) chi.Router {
 		r.Get("/chats/{id}", chatHandler.Get)
 		r.Delete("/chats/{id}", chatHandler.Delete)
 		r.Post("/chats/{id}/messages", chatHandler.Send)
+		r.Post("/chats/{id}/attachments", chatHandler.Upload)
+		r.Get("/chats/{id}/attachments/{attachment}", chatHandler.Attachment)
 		r.Post("/chats/{id}/cancel", chatHandler.Cancel)
 		r.Get("/chats/{id}/stream", chatHandler.Stream)
 		r.Get("/chats/{id}/architecture", chatHandler.Architecture)

@@ -10,8 +10,13 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// ErrHandleTaken is returned when another of the owner's agents already has
+// the name an agent was to be given.
+var ErrHandleTaken = errors.New("agent handle already in use")
 
 // Agent is a coding agent: a named conversation with the agent program
 // inside a machine, belonging to a chat.
@@ -24,8 +29,12 @@ type Agent struct {
 	// stored on it.
 	MachineName string
 	// ChatTitle is the title of the chat the agent belongs to, read with it.
-	ChatTitle  string
+	ChatTitle string
+	// Name is the agent's job within its chat ("frontend"), chosen by the
+	// assistant. Handle is its own name ("tom"), chosen by the platform and
+	// unique among the owner's agents, by which the owner addresses it.
 	Name       string
+	Handle     string
 	Status     string
 	Task       string
 	Background bool
@@ -37,7 +46,7 @@ type Agent struct {
 	UpdatedAt  time.Time
 }
 
-const agentColumns = `a.id, a.owner_id, a.chat_id, a.instance_id, i.name, c.title, a.name, a.status,
+const agentColumns = `a.id, a.owner_id, a.chat_id, a.instance_id, i.name, c.title, a.name, a.handle, a.status,
 	a.task, a.background, a.activity, a.report, a.started_at, a.finished_at, a.created_at, a.updated_at`
 
 const agentTables = `agents a JOIN instances i ON i.id = a.instance_id JOIN chats c ON c.id = a.chat_id`
@@ -85,23 +94,44 @@ func NewAgentRepository(db *pgxpool.Pool) *AgentRepository {
 }
 
 // Ensure returns the chat's agent with the given name on an instance,
-// creating it, idle, if there is none.
-func (r *AgentRepository) Ensure(ctx context.Context, ownerID, chatID, instanceID, name string) (*Agent, error) {
+// creating it, idle and called handle, if there is none. An agent that
+// already exists keeps the handle it has. If another of the owner's agents
+// has that handle, it returns ErrHandleTaken.
+func (r *AgentRepository) Ensure(ctx context.Context, ownerID, chatID, instanceID, name, handle string) (*Agent, error) {
 	// The update that changes nothing is what makes RETURNING yield the row
 	// that was already there.
 	var id string
 	err := r.db.QueryRow(ctx,
-		`INSERT INTO agents (id, owner_id, chat_id, instance_id, name, status)
-		 VALUES ($1, $2, $3, $4, $5, 'idle')
+		`INSERT INTO agents (id, owner_id, chat_id, instance_id, name, handle, status)
+		 VALUES ($1, $2, $3, $4, $5, $6, 'idle')
 		 ON CONFLICT (chat_id, instance_id, name) DO UPDATE SET name = EXCLUDED.name
 		 RETURNING id`,
-		uuid.NewString(), ownerID, chatID, instanceID, name,
+		uuid.NewString(), ownerID, chatID, instanceID, name, handle,
 	).Scan(&id)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "agents_owner_handle" {
+			return nil, ErrHandleTaken
+		}
 		return nil, fmt.Errorf("ensure agent: %w", err)
 	}
 
 	return r.GetByID(ctx, id, ownerID)
+}
+
+// Handles returns the handles of all the owner's agents, in every chat.
+func (r *AgentRepository) Handles(ctx context.Context, ownerID string) ([]string, error) {
+	rows, err := r.db.Query(ctx, `SELECT handle FROM agents WHERE owner_id = $1`, ownerID)
+	if err != nil {
+		return nil, fmt.Errorf("list agent handles: %w", err)
+	}
+
+	handles, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("list agent handles: %w", err)
+	}
+
+	return handles, nil
 }
 
 // GetByID returns the agent only if it belongs to ownerID.
@@ -342,7 +372,7 @@ func (r *AgentRepository) SetSession(ctx context.Context, id, sessionID string) 
 
 func scanAgent(row pgx.CollectableRow) (*Agent, error) {
 	var a Agent
-	err := row.Scan(&a.ID, &a.OwnerID, &a.ChatID, &a.InstanceID, &a.MachineName, &a.ChatTitle, &a.Name, &a.Status,
+	err := row.Scan(&a.ID, &a.OwnerID, &a.ChatID, &a.InstanceID, &a.MachineName, &a.ChatTitle, &a.Name, &a.Handle, &a.Status,
 		&a.Task, &a.Background, &a.Activity, &a.Report, &a.StartedAt, &a.FinishedAt, &a.CreatedAt, &a.UpdatedAt)
 	if err != nil {
 		return nil, err
@@ -350,20 +380,33 @@ func scanAgent(row pgx.CollectableRow) (*Agent, error) {
 	return &a, nil
 }
 
-// AgentMessage is a question one agent left for another that was busy.
+// AgentMessage is a question one agent left for another that was busy, or
+// something the owner wrote to an agent that was busy.
 type AgentMessage struct {
+	// FromMachine and FromAgent say which agent asked. Both are empty when
+	// the owner wrote it.
 	FromMachine string
 	FromAgent   string
+	FromOwner   bool
 	Body        string
+	// Attachments are the IDs of the files that came with it, and ChatSeq
+	// the chat event it was. Only the owner's messages have them.
+	Attachments []string
+	ChatSeq     *int64
 	CreatedAt   time.Time
 }
 
 // AddMessage leaves a message for an agent.
 func (r *AgentRepository) AddMessage(ctx context.Context, toAgentID string, msg *AgentMessage) error {
+	attachments := msg.Attachments
+	if attachments == nil {
+		attachments = []string{}
+	}
+
 	_, err := r.db.Exec(ctx,
-		`INSERT INTO agent_messages (to_agent_id, from_machine, from_agent, body)
-		 VALUES ($1, $2, $3, $4)`,
-		toAgentID, msg.FromMachine, msg.FromAgent, msg.Body,
+		`INSERT INTO agent_messages (to_agent_id, from_machine, from_agent, from_owner, body, attachments, chat_seq)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		toAgentID, msg.FromMachine, msg.FromAgent, msg.FromOwner, msg.Body, attachments, msg.ChatSeq,
 	)
 	if err != nil {
 		return fmt.Errorf("add agent message: %w", err)
@@ -372,15 +415,16 @@ func (r *AgentRepository) AddMessage(ctx context.Context, toAgentID string, msg 
 	return nil
 }
 
-// TakeMessages returns the messages waiting for an agent, oldest first, and
-// marks them as delivered, in one statement: a message is handed over once.
-func (r *AgentRepository) TakeMessages(ctx context.Context, agentID string) ([]*AgentMessage, error) {
+// TakeMessages returns the messages waiting for an agent, either those from
+// the owner or those from other agents, oldest first, and marks them as
+// delivered, in one statement: a message is handed over once.
+func (r *AgentRepository) TakeMessages(ctx context.Context, agentID string, fromOwner bool) ([]*AgentMessage, error) {
 	rows, err := r.db.Query(ctx,
 		`UPDATE agent_messages
 		 SET delivered_at = NOW()
-		 WHERE to_agent_id = $1 AND delivered_at IS NULL
-		 RETURNING id, from_machine, from_agent, body, created_at`,
-		agentID,
+		 WHERE to_agent_id = $1 AND from_owner = $2 AND delivered_at IS NULL
+		 RETURNING id, from_machine, from_agent, from_owner, body, attachments::TEXT[], chat_seq, created_at`,
+		agentID, fromOwner,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("take agent messages: %w", err)
@@ -392,7 +436,7 @@ func (r *AgentRepository) TakeMessages(ctx context.Context, agentID string) ([]*
 	}
 	taken, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (numbered, error) {
 		n := numbered{msg: &AgentMessage{}}
-		err := row.Scan(&n.id, &n.msg.FromMachine, &n.msg.FromAgent, &n.msg.Body, &n.msg.CreatedAt)
+		err := row.Scan(&n.id, &n.msg.FromMachine, &n.msg.FromAgent, &n.msg.FromOwner, &n.msg.Body, &n.msg.Attachments, &n.msg.ChatSeq, &n.msg.CreatedAt)
 		return n, err
 	})
 	if err != nil {

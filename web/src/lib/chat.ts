@@ -7,6 +7,8 @@ import {
   type ChatEvent,
   type AgentExchange,
   type AgentNews,
+  type AgentPost,
+  type Attachment,
   type ToolCall,
   type ToolResult,
 } from "./api";
@@ -142,6 +144,9 @@ export function useChats() {
   return { chats, refresh };
 }
 
+/** How the user addresses the assistant itself. */
+export const ASSISTANT = "assistant";
+
 /** One thing the assistant set out to do, and how it went. */
 export type Step = {
   call: ToolCall;
@@ -195,7 +200,10 @@ export function agentChanges(events: ChatEvent[]) {
       ["code_on_machine", "stop_agent"].includes(event.payload.name)
     ) {
       changes++;
-    } else if (event.kind === "agent") {
+    } else if (event.kind === "agent" || event.kind === "post") {
+      changes++;
+    } else if (event.kind === "user" && event.payload.to?.length) {
+      // Written to agents: they start work on it.
       changes++;
     }
   }
@@ -229,14 +237,45 @@ export function machineChanges(events: ChatEvent[]) {
   return changes;
 }
 
-export type TranscriptItem =
-  | { type: "user"; seq: number; text: string }
-  | { type: "assistant"; seq: number; text: string; steps: Step[] }
-  | { type: "error"; seq: number; message: string; stopped: boolean }
+/** An agent the user wrote to, and how far it has got with answering. */
+export type Answering = {
+  handle: string;
+  /** What it has done so far, oldest first. */
+  activity: string[];
+  /** It has answered (or said it could not). */
+  answered: boolean;
+  /** It was busy, and reads the message when its task ends. */
+  queued: boolean;
+};
+
+export type TranscriptItem = { seq: number; at: string } & (
+  | {
+      type: "user";
+      text: string;
+      /** The agents it was written to, by handle; "assistant" if named too. */
+      to: string[];
+      attachments: Attachment[];
+      /** The agents it was written to, each with how it is getting on. */
+      answering: Answering[];
+    }
+  | { type: "assistant"; text: string; steps: Step[] }
+  | { type: "error"; message: string; stopped: boolean }
   /** A background agent finished, at this point in the conversation. */
-  | { type: "news"; seq: number; news: AgentNews }
+  | { type: "news"; news: AgentNews }
   /** One agent asked another something. */
-  | { type: "exchange"; seq: number; exchange: AgentExchange };
+  | { type: "exchange"; exchange: AgentExchange }
+  /**
+   * An agent wrote in the chat. `quote` is what the user wrote that it
+   * answers; `answer` is what the user chose, for a question they have
+   * answered.
+   */
+  | { type: "post"; post: AgentPost; quote?: string; answer?: string }
+);
+
+/** The ID an agent's work on the user's message is recorded under (see the server's directCallID). */
+export function directCallId(seq: number, handle: string) {
+  return `direct-${seq}-${handle}`;
+}
 
 function parseArgs(raw: string): Record<string, unknown> {
   try {
@@ -254,12 +293,60 @@ function parseArgs(raw: string): Record<string, unknown> {
 export function buildTranscript(events: ChatEvent[]): TranscriptItem[] {
   const items: TranscriptItem[] = [];
   const steps = new Map<string, Step>();
+  // The user's messages to agents, by sequence number, and each agent's
+  // progress on one, by the ID its work is recorded under.
+  const written = new Map<number, Extract<TranscriptItem, { type: "user" }>>();
+  const answering = new Map<string, Answering>();
+  // Questions from agents still open, by the agent asking.
+  const asking = new Map<string, Extract<TranscriptItem, { type: "post" }>>();
 
   for (const event of events) {
+    const at = event.created_at;
+
     switch (event.kind) {
-      case "user":
-        items.push({ type: "user", seq: event.seq, text: event.payload.text });
+      case "user": {
+        const to = event.payload.to ?? [];
+        const item = {
+          type: "user" as const,
+          seq: event.seq,
+          at,
+          text: event.payload.text,
+          to,
+          attachments: event.payload.attachments ?? [],
+          answering: to
+            .filter((handle) => handle !== ASSISTANT)
+            .map((handle) => ({ handle, activity: [], answered: false, queued: false })),
+        };
+        for (const one of item.answering) answering.set(directCallId(event.seq, one.handle), one);
+        written.set(event.seq, item);
+        // Writing to an agent that asked something is the answer to it.
+        for (const handle of to) {
+          const question = asking.get(handle);
+          if (question) {
+            question.answer = event.payload.text;
+            asking.delete(handle);
+          }
+        }
+        items.push(item);
         break;
+      }
+
+      case "post": {
+        const post = event.payload;
+        const asked = post.reply_to ? written.get(post.reply_to) : undefined;
+        const one = asked?.answering.find((a) => a.handle === post.agent);
+        if (one) {
+          if (post.queued) one.queued = true;
+          else one.answered = true;
+        }
+        // Word that it is busy is shown with the message, not by itself.
+        if (post.queued) break;
+
+        const item = { type: "post" as const, seq: event.seq, at, post, quote: asked?.text };
+        if (post.question) asking.set(post.agent, item);
+        items.push(item);
+        break;
+      }
 
       case "assistant": {
         const list: Step[] = (event.payload.tool_calls ?? []).map((call) => ({
@@ -269,7 +356,13 @@ export function buildTranscript(events: ChatEvent[]): TranscriptItem[] {
           activity: [],
         }));
         for (const step of list) steps.set(step.call.id, step);
-        items.push({ type: "assistant", seq: event.seq, text: event.payload.text, steps: list });
+        items.push({
+          type: "assistant",
+          seq: event.seq,
+          at,
+          text: event.payload.text,
+          steps: list,
+        });
         break;
       }
 
@@ -283,6 +376,7 @@ export function buildTranscript(events: ChatEvent[]): TranscriptItem[] {
 
       case "activity":
         steps.get(event.payload.tool_call_id)?.activity.push(event.payload.text);
+        answering.get(event.payload.tool_call_id)?.activity.push(event.payload.text);
         break;
 
       case "agent": {
@@ -291,18 +385,19 @@ export function buildTranscript(events: ChatEvent[]): TranscriptItem[] {
         // speaks up next.
         const step = steps.get(event.payload.tool_call_id);
         if (step) step.news = event.payload;
-        items.push({ type: "news", seq: event.seq, news: event.payload });
+        items.push({ type: "news", seq: event.seq, at, news: event.payload });
         break;
       }
 
       case "message":
-        items.push({ type: "exchange", seq: event.seq, exchange: event.payload });
+        items.push({ type: "exchange", seq: event.seq, at, exchange: event.payload });
         break;
 
       case "error":
         items.push({
           type: "error",
           seq: event.seq,
+          at,
           message: event.payload.message,
           stopped: event.payload.stopped ?? false,
         });
@@ -311,4 +406,25 @@ export function buildTranscript(events: ChatEvent[]): TranscriptItem[] {
   }
 
   return items;
+}
+
+/** "@name" in what the user writes, as the server finds it (see its handles.go). */
+const MENTION = /(?:^|[^\w@.])@([a-z][a-z0-9-]*)/gi;
+
+/**
+ * Who a message will go to, as the server will decide it: the agents among
+ * `handles` it mentions, and whether the assistant gets it too (it does when
+ * it is named, or when no agent is).
+ */
+export function recipientsOf(text: string, handles: string[]) {
+  const agents: string[] = [];
+  let assistant = false;
+
+  for (const match of text.toLowerCase().matchAll(MENTION)) {
+    const name = match[1].replace(/-+$/, "");
+    if (name === ASSISTANT) assistant = true;
+    else if (handles.includes(name) && !agents.includes(name)) agents.push(name);
+  }
+
+  return { agents, assistant: assistant || agents.length === 0 };
 }

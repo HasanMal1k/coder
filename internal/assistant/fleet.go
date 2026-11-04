@@ -40,15 +40,18 @@ const (
 // taskPreamble is put in front of every task. The agent knows nothing about
 // the platform it runs on; this tells it what a task from the assistant can't
 // be relied on to repeat every time.
-const taskPreamble = `You are %[1]q, a coding agent on the machine %[2]q: Ubuntu Linux, user "coder" with passwordless sudo, home /home/coder. This task comes from an assistant working for the machine's owner. Nobody is watching you work, so never wait for input.
+const taskPreamble = `You are %[5]s, the %[1]q agent: a coding agent on the machine %[2]q, Ubuntu Linux, user "coder" with passwordless sudo, home /home/coder. You work for the machine's owner, in a project chat they share with an assistant that directs the work and with the other agents; there they call you @%[5]s. This task comes from the assistant, or from the owner directly. Nobody is watching you work, so never wait for input.
 
 Where you are:
 - You are one of a team. ~/.coder/team/ on this machine is kept up to date with everything the team knows; start with TEAM.md. ARCHITECTURE.md is the design the owner agreed to: build to it. CONNECTIONS.md says what this machine's components are connected to and the addresses to use for them.
 - The team tools give you the same, as of this moment: list_machines, list_agents, get_agent (everything one agent was asked, did and reported), get_architecture, read_notes.
 - To learn something only another agent knows, ask it with ask_agent, giving your own name (%[1]q): it answers from what it built. Before you guess how something another agent made works (its port, its API, where its files are), look it up or ask.
 - When you make something another agent will have to work with, leave the details with share_note, giving your own name: an API's endpoints and what they return, a database's name and login.
+- To show the owner something (a mockup, a screenshot, a page you serve, a choice you made), use post_to_chat, with files from this machine or the port of a page. To have them decide something only they can (a design language, which mockup), use ask_owner, with the options; their answer comes to you later as a new message, so do not wait for it. Use both sparingly: your report already reaches whoever gave you the task.
 
 Rules:
+- Do the whole of your task, as finished, working software: leave nothing out, stubbed or marked to do later. Use the well-known library for a job (a JWT library, a database driver, a router) rather than writing your own.
+- The other components are being built at the same time as yours, so what you depend on may not be running yet. Do not wait for it to start your own work: build against what your task, ARCHITECTURE.md and CONNECTIONS.md say it offers. A program of yours that needs another keeps retrying the connection until it answers, rather than exiting. To check your work against another component, wait for it (try every few seconds, for up to ten minutes) before you report it missing.
 - Work under /home/coder, with a folder of its own for each project. Other agents may be working on this machine at the same time: keep to what your task covers, and do not stop, restart or change programs and files you were not asked to touch.
 - Install what you need: apt (with sudo, and -y) or a language's own installer. Python 3 and Node.js are on every machine; this one may have more, which TEAM.md says.
 - A program that has to keep running (a server, a database) is registered with the run_service tool: a name, the command, its directory and its port. The platform starts it, restarts it if it exits and whenever the machine starts, gives it the addresses in CONNECTIONS.md as environment variables, and tells you whether it came up. The command must stay in the foreground (no & at the end, no nohup) and listen on 0.0.0.0. Never leave a server running from your own shell: it would be gone the next time the machine stops.
@@ -69,6 +72,8 @@ type Instances interface {
 	Stop(ctx context.Context, ownerID, id string) (*store.Instance, error)
 	DialPort(ctx context.Context, id string, port int) (net.Conn, error)
 	ForMachine(ctx context.Context, id string) (*store.Instance, error)
+	PutFile(ctx context.Context, id, path string, data []byte) (string, error)
+	GetFile(ctx context.Context, id, path string, maxSize int) ([]byte, string, error)
 	MachineConnected(id string) (done func())
 	UserConnected(userID string) (done func())
 }
@@ -265,7 +270,7 @@ func (f *Fleet) Stop(ctx context.Context, ownerID, name string) (Machine, error)
 // report, starting the machine first if it is stopped. Each agent is its own
 // conversation with the agent program, so several work on one machine at
 // once without seeing each other's tasks.
-func (f *Fleet) RunTask(ctx context.Context, ownerID, name string, agent AgentRef, task string, progress func(string)) (string, error) {
+func (f *Fleet) RunTask(ctx context.Context, ownerID, name string, agent AgentRef, task string, files []TaskFile, progress func(string)) (string, error) {
 	inst, err := f.find(ctx, ownerID, name)
 	if err != nil {
 		return "", err
@@ -312,7 +317,13 @@ func (f *Fleet) RunTask(ctx context.Context, ownerID, name string, agent AgentRe
 		log.Printf("assistant: watch the coding agent on %s (%s): %v", inst.Name, inst.ID, err)
 	}
 
-	report, err := w.prompt(ctx, sessionID, fmt.Sprintf(taskPreamble, agent.Name, inst.Name, task, APIDescriptionPath))
+	task = f.putFiles(ctx, inst, task, files, progress)
+
+	handle := agent.Handle
+	if handle == "" {
+		handle = agent.Name
+	}
+	report, err := w.prompt(ctx, sessionID, fmt.Sprintf(taskPreamble, agent.Name, inst.Name, task, APIDescriptionPath, handle))
 
 	stopWatching()
 	if watching != nil {
@@ -339,6 +350,38 @@ func (f *Fleet) RunTask(ctx context.Context, ownerID, name string, agent AgentRe
 	}
 
 	return report, nil
+}
+
+// putFiles puts the files a task comes with on its machine, and returns the
+// task. If they could not all be put there, the task says so, and the agent
+// carries on without them.
+func (f *Fleet) putFiles(ctx context.Context, inst *store.Instance, task string, files []TaskFile, progress func(string)) string {
+	if len(files) == 0 {
+		return task
+	}
+
+	progress(fmt.Sprintf("Copying %d file(s) to the machine", len(files)))
+	for _, file := range files {
+		if _, err := f.instances.PutFile(ctx, inst.ID, file.Path, file.Data); err != nil {
+			log.Printf("assistant: put %s on %s (%s): %v", file.Path, inst.Name, inst.ID, err)
+			return task + fmt.Sprintf("\n\n(From the platform: the files above could not be put on this machine: %v. Say so in your report.)", err)
+		}
+	}
+
+	return task
+}
+
+// GetFile reads a file on a running machine.
+func (f *Fleet) GetFile(ctx context.Context, instanceID, path string, maxSize int) ([]byte, string, error) {
+	data, where, err := f.instances.GetFile(ctx, instanceID, path, maxSize)
+	switch {
+	case errors.Is(err, instance.ErrFileNotFound):
+		return nil, "", fmt.Errorf("there is no file at %s", path)
+	case errors.Is(err, instance.ErrFileRefused):
+		return nil, "", errors.New(strings.TrimPrefix(err.Error(), instance.ErrFileRefused.Error()+": "))
+	}
+
+	return data, where, err
 }
 
 // session returns the agent's conversation with the agent program, starting

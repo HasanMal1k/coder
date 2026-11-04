@@ -1,0 +1,30 @@
+[package]
+name = "linkd"
+version = "0.1.0"
+edition = "2024"
+description = "The link daemon: a machine's end of the distributed harness."
+publish = false
+
+[dependencies]
+# gRPC over HTTP/2: a client to the control plane and to peers, and a server
+# for peers. No TLS.
+tonic = { version = "0.14", default-features = false, features = ["channel", "server", "router", "codegen"] }
+tonic-prost = "0.14"
+prost = "0.14"
+# One thread is enough for a program that only waits on the network.
+tokio = { version = "1", default-features = false, features = ["rt", "net", "time", "sync", "macros", "signal"] }
+tokio-stream = { version = "0.1", default-features = false }
+# Peers prove themselves to each other with an HMAC under their mesh's key.
+hmac = "0.12"
+sha2 = { version = "0.10", default-features = false }
+
+[build-dependencies]
+tonic-prost-build = "0.14"
+
+# Built to be small: it runs on every machine, beside the user's own work.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

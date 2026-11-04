@@ -20,17 +20,17 @@ func teamOf(t *testing.T) (*harness, *Team) {
 	h.machines.Create(ctx, "alice", MachineSpec{Name: "web"}, func(string) {})
 	h.machines.Create(ctx, "mallory", MachineSpec{Name: "secret"}, func(string) {})
 
-	backend, _ := h.agents.Ensure(ctx, "alice", id, "id-api", "backend")
+	backend, _ := h.agents.Ensure(ctx, "alice", id, "id-api", "backend", "h-backend")
 	h.agents.Begin(ctx, backend.ID, "Build a JSON API on port 8000.", false)
 	h.agents.SetActivity(ctx, backend.ID, "Writing api/server.py")
 	h.agents.SetActivity(ctx, backend.ID, "Running python3 server.py")
 	h.agents.Finish(ctx, backend.ID, AgentIdle, "Built /home/coder/api/server.py, listening on port 8000.")
 
-	frontend, _ := h.agents.Ensure(ctx, "alice", id, "id-web", "frontend")
+	frontend, _ := h.agents.Ensure(ctx, "alice", id, "id-web", "frontend", "h-frontend")
 	h.agents.Begin(ctx, frontend.ID, "Build a page that shows the API's data.", true)
 	h.agents.SetActivity(ctx, frontend.ID, "Reading up on backend on api")
 
-	other, _ := h.agents.Ensure(ctx, "mallory", h.chat("mallory"), "id-secret", "spy")
+	other, _ := h.agents.Ensure(ctx, "mallory", h.chat("mallory"), "id-secret", "spy", "h-spy")
 	h.agents.Begin(ctx, other.ID, "Something private.", false)
 
 	if err := h.svc.ShareNote(ctx, "alice", "api", "backend", "API endpoints", "GET / returns {service, message}."); err != nil {
@@ -96,11 +96,11 @@ func TestTheTeamAsFilesForAMachine(t *testing.T) {
 		"This machine is `web`",
 		"`api`: running",
 		"http://api:<port>",
-		"### backend on `api`",
+		"### h-backend (backend) on `api`",
 		"Latest task (done): Build a JSON API on port 8000.",
 		"listening on port 8000",
 		"agents/api--backend.md",
-		"### frontend on `web`",
+		"### h-frontend (frontend) on `web`",
 		"Right now: Reading up on backend on api",
 		"API endpoints (from backend on `api`)",
 	} {

@@ -130,6 +130,30 @@ func TestForwardsWithTheRealKeyAndModel(t *testing.T) {
 	}
 }
 
+func TestSetsHowHardTheModelThinks(t *testing.T) {
+	front, up, _ := newGateway(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"hi"}}]}`)
+	})
+	body := `{"messages":[{"role":"user","content":"hello"}],"reasoning_effort":"low"}`
+
+	// Unset, the machine's own choice passes through like the rest.
+	call(t, front.URL, machineKey, body)
+	if up.body["reasoning_effort"] != "low" {
+		t.Errorf("reasoning_effort = %v, want the request's own when none is configured", up.body["reasoning_effort"])
+	}
+
+	gateway := New(Config{BaseURL: up.server.URL + "/v1/", APIKey: "real-key", Model: "deepseek-chat", ReasoningEffort: "max"},
+		fakeGuests{}, &fakeTasks{active: map[string]bool{machineID: true}})
+	configured := httptest.NewServer(http.HandlerFunc(gateway.ChatCompletions))
+	t.Cleanup(configured.Close)
+
+	call(t, configured.URL, machineKey, body)
+	if up.body["reasoning_effort"] != "max" {
+		t.Errorf("reasoning_effort = %v, want the configured one whatever the machine asked for", up.body["reasoning_effort"])
+	}
+}
+
 func TestRefusesWithoutValidMachineCredentials(t *testing.T) {
 	front, up, _ := newGateway(t, func(http.ResponseWriter, *http.Request) {})
 

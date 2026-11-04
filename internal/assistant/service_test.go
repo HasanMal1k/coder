@@ -154,7 +154,7 @@ func newMemAgents() *memAgents {
 	return &memAgents{agents: map[string]*store.Agent{}, messages: map[string][]*store.AgentMessage{}}
 }
 
-func (m *memAgents) Ensure(_ context.Context, ownerID, chatID, instanceID, name string) (*store.Agent, error) {
+func (m *memAgents) Ensure(_ context.Context, ownerID, chatID, instanceID, name, handle string) (*store.Agent, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, a := range m.agents {
@@ -163,11 +163,16 @@ func (m *memAgents) Ensure(_ context.Context, ownerID, chatID, instanceID, name 
 			return &copied, nil
 		}
 	}
+	for _, a := range m.agents {
+		if a.OwnerID == ownerID && a.Handle == handle {
+			return nil, store.ErrHandleTaken
+		}
+	}
 	a := &store.Agent{
 		ID: uuid.NewString(), OwnerID: ownerID, ChatID: chatID, InstanceID: instanceID,
 		// The pretend machines' IDs are "id-" and their name.
 		MachineName: strings.TrimPrefix(instanceID, "id-"),
-		Name:        name, Status: AgentIdle, CreatedAt: time.Now(),
+		Name:        name, Handle: handle, Status: AgentIdle, CreatedAt: time.Now(),
 	}
 	m.agents[a.ID] = a
 	copied := *a
@@ -318,12 +323,63 @@ func (m *memAgents) AddMessage(_ context.Context, toAgentID string, msg *store.A
 	return nil
 }
 
-func (m *memAgents) TakeMessages(_ context.Context, agentID string) ([]*store.AgentMessage, error) {
+func (m *memAgents) TakeMessages(_ context.Context, agentID string, fromOwner bool) ([]*store.AgentMessage, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	taken := m.messages[agentID]
-	delete(m.messages, agentID)
+	var taken, left []*store.AgentMessage
+	for _, msg := range m.messages[agentID] {
+		if msg.FromOwner == fromOwner {
+			taken = append(taken, msg)
+		} else {
+			left = append(left, msg)
+		}
+	}
+	m.messages[agentID] = left
 	return taken, nil
+}
+
+func (m *memAgents) Handles(_ context.Context, ownerID string) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var handles []string
+	for _, a := range m.agents {
+		if a.OwnerID == ownerID {
+			handles = append(handles, a.Handle)
+		}
+	}
+	return handles, nil
+}
+
+// memAttachments keeps files in memory.
+type memAttachments struct {
+	mu    sync.Mutex
+	files map[string]*store.Attachment
+}
+
+func newMemAttachments() *memAttachments {
+	return &memAttachments{files: map[string]*store.Attachment{}}
+}
+
+func (m *memAttachments) Create(_ context.Context, a *store.Attachment) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	a.ID = uuid.NewString()
+	a.Size = len(a.Data)
+	a.CreatedAt = time.Now()
+	copied := *a
+	m.files[a.ID] = &copied
+	return nil
+}
+
+func (m *memAttachments) Get(_ context.Context, id, chatID, ownerID string) (*store.Attachment, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	a, ok := m.files[id]
+	if !ok || a.ChatID != chatID || a.OwnerID != ownerID {
+		return nil, store.ErrNotFound
+	}
+	copied := *a
+	return &copied, nil
 }
 
 // memDesigns keeps designs in memory.
@@ -492,6 +548,21 @@ type fakeMachines struct {
 	open map[string]bool
 	// pages is what those ports serve, as "machine id:port/path".
 	pages map[string]string
+	// files is what is on machines, as "machine id:path".
+	files map[string][]byte
+}
+
+func (f *fakeMachines) GetFile(_ context.Context, instanceID, path string, maxSize int) ([]byte, string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	data, ok := f.files[instanceID+":"+path]
+	if !ok {
+		return nil, "", fmt.Errorf("there is no file at %s", path)
+	}
+	if len(data) > maxSize {
+		return nil, "", fmt.Errorf("%s is too large", path)
+	}
+	return data, path, nil
 }
 
 func newFakeMachines() *fakeMachines {
@@ -543,9 +614,15 @@ func (f *fakeMachines) Stop(ctx context.Context, ownerID, name string) (Machine,
 	return f.Find(ctx, ownerID, name)
 }
 
-func (f *fakeMachines) RunTask(ctx context.Context, ownerID, name string, agent AgentRef, task string, progress func(string)) (string, error) {
+func (f *fakeMachines) RunTask(ctx context.Context, ownerID, name string, agent AgentRef, task string, files []TaskFile, progress func(string)) (string, error) {
 	f.mu.Lock()
 	f.tasks = append(f.tasks, name+"|"+agent.Name+"|"+task)
+	for _, file := range files {
+		if f.files == nil {
+			f.files = map[string][]byte{}
+		}
+		f.files["id-"+name+":"+file.Path] = file.Data
+	}
 	run := f.runTask
 	f.mu.Unlock()
 
@@ -620,6 +697,7 @@ type harness struct {
 	t        *testing.T
 	store    *memStore
 	agents   *memAgents
+	files    *memAttachments
 	designs  *memDesigns
 	services *memServices
 	llm      *scriptedLLM
@@ -630,7 +708,7 @@ type harness struct {
 func newHarness(t *testing.T, reply func(call int, messages []Message) (Message, error)) *harness {
 	t.Helper()
 	h := &harness{
-		t: t, store: newMemStore(), agents: newMemAgents(), designs: newMemDesigns(), services: newMemServices(),
+		t: t, store: newMemStore(), agents: newMemAgents(), files: newMemAttachments(), designs: newMemDesigns(), services: newMemServices(),
 		llm: &scriptedLLM{reply: reply}, machines: newFakeMachines(),
 	}
 	h.svc = NewService(h.stores(), h.llm, h.machines)
@@ -638,7 +716,7 @@ func newHarness(t *testing.T, reply func(call int, messages []Message) (Message,
 }
 
 func (h *harness) stores() Stores {
-	return Stores{Chats: h.store, Agents: h.agents, Designs: h.designs, Services: h.services}
+	return Stores{Chats: h.store, Agents: h.agents, Attachments: h.files, Designs: h.designs, Services: h.services}
 }
 
 func (h *harness) chat(owner string) string {
@@ -795,6 +873,34 @@ func TestToolsRunAndTheirResultsGoBackToTheModel(t *testing.T) {
 	json.Unmarshal(h.payloads("alice", id, KindTool)[0], &created)
 	if created.Machine == nil || created.Machine.ID != "id-api" {
 		t.Errorf("create result carries machine %+v, want the new machine for the interface to link to", created.Machine)
+	}
+}
+
+func TestTheModelsReasoningGoesBackToIt(t *testing.T) {
+	h := newHarness(t, func(call int, _ []Message) (Message, error) {
+		if call == 0 {
+			reply := wants(callTool("c1", toolListMachines, map[string]any{}))
+			reply.ReasoningContent = "They have no machines yet, so I should look first."
+			return reply, nil
+		}
+		return says("You have none."), nil
+	})
+	id := h.chat("alice")
+
+	h.send("alice", id, "what machines do I have?")
+	h.settle("alice", id)
+
+	// DeepSeek requires what it reasoned before a tool call on every later
+	// request; without it the model loses the thread between tool calls.
+	next := h.llm.sent(1)
+	if len(next) < 3 || next[2].Role != "assistant" || next[2].ReasoningContent != "They have no machines yet, so I should look first." {
+		t.Errorf("the second request was %+v; want the first reply's reasoning in it", next)
+	}
+
+	var stored AssistantPayload
+	json.Unmarshal(h.payloads("alice", id, KindAssistant)[0], &stored)
+	if stored.Reasoning == "" || stored.Text != "" {
+		t.Errorf("stored = %+v; the reasoning is kept with the message, apart from its text", stored)
 	}
 }
 

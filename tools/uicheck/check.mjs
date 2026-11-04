@@ -65,7 +65,8 @@ async function open(path, options = {}) {
     return el ? Math.round(el.scrollHeight - el.scrollTop - el.clientHeight) : -1;
   });
   check("chat opens scrolled to its end", atEnd >= 0 && atEnd <= 2, `distance from end ${atEnd}px`);
-  const last = await page.getByRole("button", { name: /Open the brokerage/ }).boundingBox();
+  // The seeded chat ends with a message to @ava, which it is still answering.
+  const last = await page.getByText("is on it").last().boundingBox();
   const box = await page.locator("textarea").boundingBox();
   check("last message clears the typing box", last && box && last.y + last.height < box.y, last && box ? `gap ${Math.round(box.y - last.y - last.height)}px` : "");
   await page.getByRole("button", { name: "Copy code" }).first().click();

@@ -374,8 +374,8 @@ func TestRecoveryFinishesInterruptedAgents(t *testing.T) {
 	id := h.chat("alice")
 	ctx := context.Background()
 
-	fg, _ := h.agents.Ensure(ctx, "alice", id, "id-api", "foreground")
-	bg, _ := h.agents.Ensure(ctx, "alice", id, "id-api", "background")
+	fg, _ := h.agents.Ensure(ctx, "alice", id, "id-api", "foreground", "h-foreground")
+	bg, _ := h.agents.Ensure(ctx, "alice", id, "id-api", "background", "h-background")
 	h.agents.Begin(ctx, fg.ID, "a", false)
 	h.agents.Begin(ctx, bg.ID, "b", true)
 
@@ -466,7 +466,7 @@ func TestTheModelCanListAndStopAgents(t *testing.T) {
 	}
 
 	listing := results["c2"].Content
-	for _, want := range []string{`"backend" on api: working`, "Task: build the API"} {
+	for _, want := range []string{`"backend" (@tom) on api: working`, "Task: build the API"} {
 		if !strings.Contains(listing, want) {
 			t.Errorf("list_agents = %q, want it to mention %q", listing, want)
 		}
@@ -492,8 +492,8 @@ func twoAgents(t *testing.T) (*harness, string) {
 	id := h.chat("alice")
 	h.machines.Create(ctx, "alice", MachineSpec{Name: "api"}, func(string) {})
 	h.machines.Create(ctx, "alice", MachineSpec{Name: "web"}, func(string) {})
-	h.agents.Ensure(ctx, "alice", id, "id-api", "backend")
-	h.agents.Ensure(ctx, "alice", id, "id-web", "frontend")
+	h.agents.Ensure(ctx, "alice", id, "id-api", "backend", "h-backend")
+	h.agents.Ensure(ctx, "alice", id, "id-web", "frontend", "h-frontend")
 	return h, id
 }
 

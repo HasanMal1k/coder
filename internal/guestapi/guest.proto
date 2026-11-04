@@ -21,6 +21,14 @@ service Guest {
 
   // Ping checks that the guest is alive.
   rpc Ping(PingRequest) returns (PingResponse);
+
+  // PutFile writes a file on the machine, creating the folders it needs and
+  // replacing a file already there. The file belongs to the machine's user.
+  rpc PutFile(PutFileRequest) returns (PutFileResponse);
+
+  // GetFile reads a file on the machine. A file larger than max_size is
+  // refused with FAILED_PRECONDITION, a missing one with NOT_FOUND.
+  rpc GetFile(GetFileRequest) returns (GetFileResponse);
 }
 
 message TerminalSize {
@@ -73,3 +81,25 @@ message ForwardResponse {
 message PingRequest {}
 
 message PingResponse {}
+
+// A path is absolute, or relative to the home folder.
+message PutFileRequest {
+  string path = 1;
+  bytes data = 2;
+}
+
+message PutFileResponse {
+  // Where the file was written, as an absolute path.
+  string path = 1;
+}
+
+message GetFileRequest {
+  string path = 1;
+  uint64 max_size = 2;
+}
+
+message GetFileResponse {
+  bytes data = 1;
+  // The path read, as an absolute path.
+  string path = 2;
+}

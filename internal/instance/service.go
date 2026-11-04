@@ -13,12 +13,14 @@ import (
 	"log"
 	"net"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/HasanMal1k/coder/internal/guestapi"
+	"github.com/HasanMal1k/coder/internal/linkapi"
 	"github.com/HasanMal1k/coder/internal/presence"
 	"github.com/HasanMal1k/coder/internal/sandbox"
 	"github.com/HasanMal1k/coder/internal/store"
@@ -69,6 +71,14 @@ var (
 	// ErrPortUnsupported is returned when the machine was created from an
 	// image whose guest daemon predates port forwarding.
 	ErrPortUnsupported = errors.New("instance does not support port forwarding")
+	// ErrFilesUnsupported is returned when the machine was created from an
+	// image whose guest daemon predates passing files.
+	ErrFilesUnsupported = errors.New("the machine was made before files could be passed to it; a machine created now can take them")
+	// ErrFileNotFound is returned when there is no file at the path asked for.
+	ErrFileNotFound = errors.New("no such file")
+	// ErrFileRefused wraps the machine's reason for not reading or writing a
+	// file: it is too large, or a folder.
+	ErrFileRefused = errors.New("file refused")
 )
 
 var validName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$`)
@@ -82,9 +92,16 @@ type Config struct {
 	// GuestConnectURL is where a machine's guest daemon dials the control
 	// plane. It must be reachable from inside the machine.
 	GuestConnectURL string
+	// LinkConnectURL is where a machine's link daemon dials the control
+	// plane, and must be reachable from inside the machine too.
+	LinkConnectURL string
 	// IdleStopAfter is how long a running machine may go with nobody
 	// connected before it is stopped. Zero means never.
 	IdleStopAfter time.Duration
+	// ModelContext and ModelOutput are the model's limits in tokens, which a
+	// machine's coding agent is configured with. Zero leaves them unset.
+	ModelContext int
+	ModelOutput  int
 }
 
 type Service struct {
@@ -169,11 +186,7 @@ func (s *Service) Create(ctx context.Context, ownerID, name string, opts Options
 			MemoryMB: inst.MemoryMB,
 			DiskGB:   inst.DiskGB,
 		},
-		Env: map[string]string{
-			guestapi.EnvInstanceID: inst.ID,
-			guestapi.EnvGuestToken: guestToken,
-			guestapi.EnvConnectURL: s.cfg.GuestConnectURL,
-		},
+		Env: s.machineEnv(inst.ID, guestToken),
 	})
 	if err != nil {
 		if errors.Is(err, sandbox.ErrImageMissing) {
@@ -192,6 +205,25 @@ func (s *Service) Create(ctx context.Context, ownerID, name string, opts Options
 	}
 
 	return s.Get(ctx, ownerID, inst.ID)
+}
+
+// machineEnv is the environment a new machine is created with: who it is,
+// where to reach the control plane, and the model's limits for its agent.
+func (s *Service) machineEnv(id, guestToken string) map[string]string {
+	env := map[string]string{
+		guestapi.EnvInstanceID: id,
+		guestapi.EnvGuestToken: guestToken,
+		guestapi.EnvConnectURL: s.cfg.GuestConnectURL,
+		linkapi.EnvLinkURL:     s.cfg.LinkConnectURL,
+	}
+	if s.cfg.ModelContext > 0 {
+		env[guestapi.EnvModelContext] = strconv.Itoa(s.cfg.ModelContext)
+	}
+	if s.cfg.ModelOutput > 0 {
+		env[guestapi.EnvModelOutput] = strconv.Itoa(s.cfg.ModelOutput)
+	}
+
+	return env
 }
 
 func (s *Service) Get(ctx context.Context, ownerID, id string) (*store.Instance, error) {
@@ -338,6 +370,46 @@ func (s *Service) DialPort(ctx context.Context, id string, port int) (net.Conn, 
 	}
 
 	return conn, nil
+}
+
+// PutFile writes data to path on instance id's machine, which must be
+// running, and returns the absolute path written. Like DialPort it does no
+// ownership check.
+func (s *Service) PutFile(ctx context.Context, id, path string, data []byte) (string, error) {
+	written, err := s.hub.PutFile(ctx, id, path, data)
+	if err != nil {
+		return "", fileError(err)
+	}
+
+	return written, nil
+}
+
+// GetFile reads the file at path on instance id's machine, which must be
+// running, refusing one larger than maxSize. It returns the file and its
+// absolute path. Like DialPort it does no ownership check.
+func (s *Service) GetFile(ctx context.Context, id, path string, maxSize int) ([]byte, string, error) {
+	data, read, err := s.hub.GetFile(ctx, id, path, maxSize)
+	if err != nil {
+		return nil, "", fileError(err)
+	}
+
+	return data, read, nil
+}
+
+func fileError(err error) error {
+	var refused *tunnel.FileError
+	switch {
+	case errors.Is(err, tunnel.ErrGuestOffline):
+		return ErrGuestOffline
+	case errors.Is(err, tunnel.ErrFilesUnsupported):
+		return ErrFilesUnsupported
+	case errors.Is(err, tunnel.ErrFileNotFound):
+		return ErrFileNotFound
+	case errors.As(err, &refused):
+		return fmt.Errorf("%w: %s", ErrFileRefused, refused.Message)
+	}
+
+	return err
 }
 
 // AuthenticateGuest checks that token is the guest token issued to instance

@@ -83,3 +83,36 @@ func TestAgentConfig(t *testing.T) {
 		t.Errorf("permission = %v; the agent must never wait for someone to approve or answer", config.Permission)
 	}
 }
+
+func TestAgentConfigUsesTheModelsLimits(t *testing.T) {
+	limits := func(cfg Config) map[string]int {
+		t.Helper()
+		cfg.ConnectURL, cfg.InstanceID, cfg.Token = "ws://control:8080/guest/connect", "instance-id", "guest-token"
+		raw, err := agentConfig(cfg)
+		if err != nil {
+			t.Fatalf("agentConfig: %v", err)
+		}
+		var config struct {
+			Provider map[string]struct {
+				Models map[string]struct {
+					Limit map[string]int `json:"limit"`
+				} `json:"models"`
+			} `json:"provider"`
+		}
+		json.Unmarshal([]byte(raw), &config)
+		return config.Provider["coder"].Models["assistant"].Limit
+	}
+
+	// What the control plane says the model takes. Less, and the agent would
+	// summarise its work away part-way through a task.
+	if got := limits(Config{ModelContext: 1_000_000, ModelOutput: 384_000}); got["context"] != 1_000_000 || got["output"] != 384_000 {
+		t.Errorf("limits = %v, want the model's own", got)
+	}
+
+	// Told nothing, or nonsense: cautious limits rather than none.
+	for _, cfg := range []Config{{}, {ModelContext: 1000, ModelOutput: 2000}, {ModelContext: -1, ModelOutput: 10}} {
+		if got := limits(cfg); got["context"] != fallbackContext || got["output"] != fallbackOutput {
+			t.Errorf("limits for %+v = %v, want the fallback", cfg, got)
+		}
+	}
+}

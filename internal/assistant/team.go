@@ -66,7 +66,10 @@ type TeamMachine struct {
 }
 
 type TeamAgent struct {
-	Name    string `json:"name"`
+	Name string `json:"name"`
+	// Handle is the agent's own name, by which the owner addresses it in
+	// the chat ("@tom").
+	Handle  string `json:"handle"`
 	Machine string `json:"machine"`
 	// Project is the title of the conversation the agent was started in.
 	Project string `json:"project"`
@@ -170,7 +173,7 @@ func (s *Service) Team(ctx context.Context, ownerID string) (*Team, error) {
 			agentTasks = []TeamTask{}
 		}
 		team.Agents = append(team.Agents, TeamAgent{
-			Name: a.Name, Machine: a.MachineName, Project: a.ChatTitle,
+			Name: a.Name, Handle: a.Handle, Machine: a.MachineName, Project: a.ChatTitle,
 			Status: a.Status, Activity: a.Activity, Tasks: agentTasks,
 		})
 	}
@@ -213,10 +216,11 @@ func (s *Service) ShareNote(ctx context.Context, ownerID, machine, author, topic
 	})
 }
 
-// Agent returns the named agent on the named machine, or nil.
+// Agent returns the agent on the named machine with the given name or
+// handle, or nil.
 func (t *Team) Agent(machine, name string) *TeamAgent {
 	for i := range t.Agents {
-		if t.Agents[i].Machine == machine && t.Agents[i].Name == name {
+		if t.Agents[i].Machine == machine && (t.Agents[i].Name == name || t.Agents[i].Handle == name) {
 			return &t.Agents[i]
 		}
 	}
@@ -292,7 +296,7 @@ func (t *Team) Overview(self string) string {
 	}
 	for i := range t.Agents {
 		a := &t.Agents[i]
-		fmt.Fprintf(&b, "### %s on `%s`\n\n", a.Name, a.Machine)
+		fmt.Fprintf(&b, "### %s on `%s`\n\n", a.title(), a.Machine)
 		fmt.Fprintf(&b, "- Status: %s\n", a.Status)
 		if a.Project != "" {
 			fmt.Fprintf(&b, "- Project: %s\n", oneLine(a.Project))
@@ -323,12 +327,21 @@ func (t *Team) Overview(self string) string {
 	return b.String()
 }
 
+// title names an agent by both its names: "tom (frontend)".
+func (a *TeamAgent) title() string {
+	if a.Handle == "" {
+		return a.Name
+	}
+
+	return fmt.Sprintf("%s (%s)", a.Handle, a.Name)
+}
+
 // Detail is everything recorded about one agent: each task it was given,
 // what it did, and how it ended.
 func (a *TeamAgent) Detail() string {
 	var b strings.Builder
 
-	fmt.Fprintf(&b, "# %s on `%s`\n\n", a.Name, a.Machine)
+	fmt.Fprintf(&b, "# %s on `%s`\n\n", a.title(), a.Machine)
 	fmt.Fprintf(&b, "- Status: %s\n", a.Status)
 	if a.Project != "" {
 		fmt.Fprintf(&b, "- Project: %s\n", oneLine(a.Project))
@@ -492,7 +505,7 @@ func (t *Team) AgentsText(machine string) string {
 			continue
 		}
 
-		fmt.Fprintf(&b, "- %s on %s: %s", a.Name, a.Machine, a.Status)
+		fmt.Fprintf(&b, "- %s on %s: %s", a.title(), a.Machine, a.Status)
 		if a.Activity != "" {
 			fmt.Fprintf(&b, "; right now: %s", a.Activity)
 		}

@@ -116,3 +116,34 @@ func TestImageFor(t *testing.T) {
 		}
 	}
 }
+
+func TestMachineEnv(t *testing.T) {
+	s := &Service{cfg: Config{
+		GuestConnectURL: "ws://control/guest/connect",
+		LinkConnectURL:  "http://control:8081",
+		ModelContext:    1_000_000,
+		ModelOutput:     384_000,
+	}}
+
+	env := s.machineEnv("id-1", "token-1")
+	want := map[string]string{
+		"CODER_INSTANCE_ID":   "id-1",
+		"CODER_GUEST_TOKEN":   "token-1",
+		"CODER_CONNECT_URL":   "ws://control/guest/connect",
+		"CODER_LINK_URL":      "http://control:8081",
+		"CODER_MODEL_CONTEXT": "1000000",
+		"CODER_MODEL_OUTPUT":  "384000",
+	}
+	for name, value := range want {
+		if env[name] != value {
+			t.Errorf("%s = %q, want %q", name, env[name], value)
+		}
+	}
+
+	// Limits that aren't known are left out, for the machine to fall back on.
+	s.cfg.ModelContext, s.cfg.ModelOutput = 0, 0
+	env = s.machineEnv("id-1", "token-1")
+	if _, ok := env["CODER_MODEL_CONTEXT"]; ok {
+		t.Errorf("env = %v; an unknown limit should not be set", env)
+	}
+}

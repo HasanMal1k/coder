@@ -42,6 +42,9 @@ type Config struct {
 	APIKey  string
 	// Model replaces whatever model a request names: machines don't choose.
 	Model string
+	// ReasoningEffort, if set, replaces the request's "reasoning_effort" in
+	// the same way: how hard the model thinks is the platform's choice.
+	ReasoningEffort string
 }
 
 type Gateway struct {
@@ -112,13 +115,17 @@ func (g *Gateway) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Everything in the request passes through untouched except the model.
+	// Everything in the request passes through untouched except the model
+	// and how hard it thinks.
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(body, &fields); err != nil {
 		writeError(w, http.StatusBadRequest, "request body is not a JSON object")
 		return
 	}
 	fields["model"], _ = json.Marshal(g.cfg.Model)
+	if g.cfg.ReasoningEffort != "" {
+		fields["reasoning_effort"], _ = json.Marshal(g.cfg.ReasoningEffort)
+	}
 	body, _ = json.Marshal(fields)
 
 	upstream, err := http.NewRequestWithContext(r.Context(), http.MethodPost,

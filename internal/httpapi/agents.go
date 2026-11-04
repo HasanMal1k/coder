@@ -23,8 +23,11 @@ type AgentMachineResponse struct {
 }
 
 type AgentResponse struct {
-	ID      string               `json:"id"`
+	ID string `json:"id"`
+	// Name is the agent's job ("frontend"); Handle is its own name ("tom"),
+	// by which the owner addresses it in its chat.
 	Name    string               `json:"name"`
+	Handle  string               `json:"handle"`
 	ChatID  string               `json:"chat_id"`
 	Machine AgentMachineResponse `json:"machine"`
 	// Status is "idle", "working", "failed" or "stopped".
@@ -94,6 +97,7 @@ func toAgentResponse(a *store.Agent) AgentResponse {
 	return AgentResponse{
 		ID:         a.ID,
 		Name:       a.Name,
+		Handle:     a.Handle,
 		ChatID:     a.ChatID,
 		Machine:    AgentMachineResponse{ID: a.InstanceID, Name: a.MachineName},
 		Status:     a.Status,

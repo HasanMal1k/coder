@@ -20,7 +20,7 @@ const QUIET_REFRESH_MS = 8000;
 
 /** Tells the user an agent has finished, wherever they are in the app. */
 function announce(agent: Agent, openChat: (chatId: string) => void) {
-  const where = `${agent.name} on ${agent.machine.name}`;
+  const where = `${agent.handle} (${agent.name}) on ${agent.machine.name}`;
   const action = { label: "Open chat", onClick: () => openChat(agent.chat_id) };
 
   if (agent.status === "idle") toast.success(`${where} finished`, { action });
@@ -102,7 +102,7 @@ export function AgentsProvider({
       try {
         await stopAgent(agent.id);
       } catch (err) {
-        toast.error(`Couldn't stop ${agent.name}`, { description: errorMessage(err) });
+        toast.error(`Couldn't stop ${agent.handle}`, { description: errorMessage(err) });
       } finally {
         refresh();
       }

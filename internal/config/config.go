@@ -3,7 +3,9 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +29,11 @@ type Config struct {
 	// GuestConnectURL is where machines dial the control plane. It must be
 	// reachable from inside a machine, which "localhost" is not.
 	GuestConnectURL string
+	// LinkAddr is where the server listens for machines' link daemons, which
+	// speak gRPC: ":8081". LinkConnectURL is where machines dial it, and like
+	// GuestConnectURL must be reachable from inside a machine.
+	LinkAddr       string
+	LinkConnectURL string
 	// WorkspaceHost is the host that machine origins are subdomains of: a
 	// machine's port is served at <port>-<instance id>.<WorkspaceHost>. It
 	// should share a registrable domain with the frontend (app.example.com
@@ -44,6 +51,15 @@ type Config struct {
 	ModelAPIKey  string
 	ModelBaseURL string
 	ModelName    string
+	// ModelContextWindow and ModelMaxOutput are the model's own limits, in
+	// tokens: how much a coding agent may hold before it summarises, and the
+	// longest reply it may ask for. They should be the model's real ones, or
+	// agents forget their work part-way through a task.
+	ModelContextWindow int
+	ModelMaxOutput     int
+	// AgentReasoningEffort is how hard coding agents' model thinks: "low",
+	// "high" or "max". Harder costs more output tokens.
+	AgentReasoningEffort string
 	// AllowedOrigins are the browser origins (e.g. "http://localhost:5173")
 	// allowed to call the API and open terminals from another origin.
 	AllowedOrigins []string
@@ -63,6 +79,8 @@ func Load() (Config, error) {
 		Port:            os.Getenv("PORT"),
 		WorkspaceImage:  os.Getenv("WORKSPACE_IMAGE"),
 		GuestConnectURL: os.Getenv("GUEST_CONNECT_URL"),
+		LinkAddr:        os.Getenv("LINK_ADDR"),
+		LinkConnectURL:  os.Getenv("LINK_CONNECT_URL"),
 		WorkspaceHost:   os.Getenv("WORKSPACE_HOST"),
 		WorkspaceScheme: os.Getenv("WORKSPACE_SCHEME"),
 		ModelAPIKey:     os.Getenv("DEEPSEEK_API_KEY"),
@@ -89,6 +107,19 @@ func Load() (Config, error) {
 		cfg.GuestConnectURL = "ws://host.docker.internal:" + cfg.Port + "/guest/connect"
 	}
 
+	if cfg.LinkAddr == "" {
+		cfg.LinkAddr = ":8081"
+	}
+	if cfg.LinkConnectURL == "" {
+		_, port, err := net.SplitHostPort(cfg.LinkAddr)
+		if err != nil {
+			return Config{}, errors.New(`LINK_ADDR must be an address to listen on, such as ":8081"`)
+		}
+		// As with the tunnel: the name by which a local Docker machine
+		// reaches a control plane running on the host.
+		cfg.LinkConnectURL = "http://host.docker.internal:" + port
+	}
+
 	if cfg.WorkspaceHost == "" {
 		// Browsers resolve every *.localhost name to this computer, so this
 		// works in development with no DNS setup. It is "coder.localhost"
@@ -111,6 +142,28 @@ func Load() (Config, error) {
 		cfg.ModelName = "deepseek-chat"
 	}
 
+	// DeepSeek V4's limits (api-docs.deepseek.com, pricing, October 2026).
+	var err error
+	if cfg.ModelContextWindow, err = tokens("LLM_CONTEXT_WINDOW", 1_000_000); err != nil {
+		return Config{}, err
+	}
+	if cfg.ModelMaxOutput, err = tokens("LLM_MAX_OUTPUT", 384_000); err != nil {
+		return Config{}, err
+	}
+	if cfg.ModelMaxOutput >= cfg.ModelContextWindow {
+		return Config{}, errors.New("LLM_MAX_OUTPUT must be less than LLM_CONTEXT_WINDOW")
+	}
+
+	cfg.AgentReasoningEffort = os.Getenv("AGENT_REASONING_EFFORT")
+	switch cfg.AgentReasoningEffort {
+	case "":
+		// What DeepSeek's own comparisons of coding agents were run at.
+		cfg.AgentReasoningEffort = "max"
+	case "low", "high", "max":
+	default:
+		return Config{}, errors.New(`AGENT_REASONING_EFFORT must be "low", "high" or "max"`)
+	}
+
 	if raw := os.Getenv("ACCESS_TOKEN_TTL"); raw != "" {
 		ttl, err := time.ParseDuration(raw)
 		if err != nil || ttl < 0 {
@@ -129,6 +182,21 @@ func Load() (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// tokens reads a count of tokens from the environment, or gives the default.
+func tokens(name string, fallback int) (int, error) {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return fallback, nil
+	}
+
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("%s must be a number of tokens, such as %d", name, fallback)
+	}
+
+	return n, nil
 }
 
 // splitList parses a comma-separated list, ignoring blanks.

@@ -35,6 +35,7 @@ else is explained where it first appears.
 22. [Tests](#22-tests)
 23. [Assumptions and known gaps](#23-assumptions-and-known-gaps)
 24. [Where to change things](#24-where-to-change-things)
+25. [The link](#25-the-link)
 
 ---
 
@@ -62,12 +63,15 @@ cloud virtual machines later.
 
 ## 2. The moving parts
 
-There are two programs, built from this repository:
+There are three programs, built from this repository:
 
 - **`server`** ([cmd/server](../cmd/server/main.go)) is the backend proper.
   One process. It is often called the *control plane* below.
 - **`guestd`** ([cmd/guestd](../cmd/guestd/main.go)) is a small daemon that
   runs *inside every machine*. It is baked into the machine image.
+- **`linkd`** ([link/](../link/src/main.rs)) is the link daemon, also inside
+  every machine and kept running by `guestd`. It is written in Rust, where
+  the other two are Go. Section 25 is about it.
 
 And the things they depend on: PostgreSQL, the Docker daemon, two programs
 that `guestd` runs inside each machine (code-server, which is VS Code for the
@@ -100,7 +104,8 @@ language model reached over the internet (DeepSeek by default).
 The arrow at the bottom is the unusual one. The server never connects *to* a
 machine. Each machine's `guestd` connects *out* to the server and keeps that
 connection open; the server then sends its requests down that same
-connection. Section 11 explains why and how.
+connection. Section 11 explains why and how. `linkd`, not drawn, does the
+same on a second connection of its own (section 25).
 
 ## 3. Vocabulary
 
@@ -134,6 +139,8 @@ cmd/
   server/main.go         builds every component and connects them
   guestd/main.go         the daemon inside machines
 
+link/                    linkd, the link daemon inside machines (Rust, its own Cargo project)
+
 internal/
   config/                environment → Config struct
   store/                 Postgres: connection pool and repositories
@@ -154,6 +161,9 @@ internal/
   llmgateway/            lets coding agents use the model without its key
   teamapi/               what machines ask the control plane for: an MCP server for their agents, and
                          the record and list of services each machine keeps
+  linkapi/               the protocol between the server and linkd (protobuf/gRPC)
+  link/                  server side of the links: the Hub of machines with one attached
+  linkgw/                the gRPC server machines' link daemons connect to
 
 images/workspace/        Dockerfile for the machine image
 migrations/              database schema, as ordered SQL files
@@ -245,13 +255,15 @@ Everything is assembled in `run()` in
 5. **Build the components**: repositories → `auth.Service` → `tunnel.Hub` →
    `instance.Service` → the assistant (`assistant.Fleet`, then
    `assistant.Service`, with a model client only if a key is configured) →
-   `wsgateway.Gateway` → `portproxy.Proxy` → `llmgateway.Gateway` → router.
+   `wsgateway.Gateway` → `portproxy.Proxy` → `llmgateway.Gateway` → router;
+   and `link.Hub` → the link gateway's gRPC server (section 25).
 6. **Recover interrupted operations**: any instance whose status says an
    operation is in progress is marked `error` (section 9 explains why this is
    safe). Likewise any chat still marked `running` is set back to `idle`,
    with a note in it saying the server restarted.
-7. **Start the HTTP server** in a goroutine and wait for either a fatal
-   server error or the root context being cancelled.
+7. **Start the HTTP server and the link gateway**, each in a goroutine and
+   on a port of its own, and wait for either a fatal error from one of them
+   or the root context being cancelled.
 
 The HTTP server's handler is `proxy.Wrap(router)`: every request is first
 checked for a machine hostname; if it has one, the port proxy handles it, and
@@ -268,8 +280,11 @@ seconds for requests in flight.
 from it, so cancelling the root cancels them all; terminal and tunnel handlers
 notice and return.
 
+The link gateway is simply stopped. Its streams last as long as machines
+do, so there is nothing in flight to wait for.
+
 Machines are not stopped when the server stops. Their `guestd` reconnects when
-the server is back.
+the server is back, and so does their link daemon.
 
 A run of the assistant in progress is cut off, like any other goroutine. The
 next startup frees its chat (step 6); the user sends a message to carry on.
@@ -286,6 +301,8 @@ the environment, after loading a `.env` file if one exists.
 | `PORT` | no | `8080` | Port the server listens on. |
 | `WORKSPACE_IMAGE` | no | `coder-workspace:dev` | Docker image new machines are created from. |
 | `GUEST_CONNECT_URL` | no | `ws://host.docker.internal:<PORT>/guest/connect` | Where machines dial the server. Must be reachable *from inside a machine*. |
+| `LINK_ADDR` | no | `:8081` | Where the server listens for machines' link daemons. gRPC, so a port of its own. |
+| `LINK_CONNECT_URL` | no | `http://host.docker.internal:<port of LINK_ADDR>` | Where machines dial that. Must be reachable *from inside a machine*. |
 | `WORKSPACE_HOST` | no | `coder.localhost:<PORT>` | Machines' ports are served at `<port>-<instance id>.<WORKSPACE_HOST>`. |
 | `WORKSPACE_SCHEME` | no | `http` | `http` or `https`: how browsers reach `WORKSPACE_HOST`. |
 | `ACCESS_TOKEN_TTL` | no | `0` | How long a sign-in token is valid, as a duration (`15m`, `24h`). `0` means it never expires. |
@@ -294,6 +311,9 @@ the environment, after loading a `.env` file if one exists.
 | `DEEPSEEK_API_KEY` | no | none | Key for the assistant's model. Without it the assistant is off and everything else works. |
 | `LLM_BASE_URL` | no | `https://api.deepseek.com/v1` | Root of the model's API. Any service that speaks the OpenAI chat-completions protocol works. |
 | `LLM_MODEL` | no | `deepseek-chat` | The model to ask for, by the assistant and the coding agents alike. It must support tool calling. Which names a key can use differs: `GET <LLM_BASE_URL>/models` lists them. |
+| `LLM_CONTEXT_WINDOW` | no | `1000000` | The model's context window, in tokens: how much a coding agent holds before it summarises its session. Set it to the model's real one (the default is DeepSeek V4's); less makes agents forget their work part-way through a task. Passed to new machines. |
+| `LLM_MAX_OUTPUT` | no | `384000` | The longest reply a coding agent may ask the model for, in tokens. Less than `LLM_CONTEXT_WINDOW`. Passed to new machines. |
+| `AGENT_REASONING_EFFORT` | no | `max` | How hard the model thinks for coding agents: `low`, `high` or `max`. The gateway sets it on every request from a machine. Harder costs more output tokens; `max` is what DeepSeek's own comparisons of coding agents use. |
 
 ## 7. The database
 
@@ -360,7 +380,7 @@ The assistant's conversations (section 16).
 |---|---|---|
 | `chat_id` | `UUID` | `REFERENCES chats (id) ON DELETE CASCADE`. |
 | `seq` | `BIGINT` | 1, 2, 3… within the chat. Primary key with `chat_id`. |
-| `kind` | `TEXT` | `CHECK`: `user`, `assistant`, `tool`, `activity`, `agent` or `error`. |
+| `kind` | `TEXT` | `CHECK`: `user`, `assistant`, `tool`, `activity`, `agent`, `message`, `post` or `error`. |
 | `payload` | `JSONB` | Shape depends on `kind`. Postgres stores it without interpreting it. |
 | `created_at` | `TIMESTAMPTZ` | |
 
@@ -371,7 +391,8 @@ belonging to one chat (section 16):
 |---|---|---|
 | `id` | `UUID` | Primary key. |
 | `owner_id`, `chat_id`, `instance_id` | `UUID` | Each `ON DELETE CASCADE`: an agent goes with its user, its chat or its machine. |
-| `name` | `TEXT` | Chosen by the assistant ("backend", "tests"). `UNIQUE (chat_id, instance_id, name)`. |
+| `name` | `TEXT` | Its job, chosen by the assistant ("backend", "tests"). `UNIQUE (chat_id, instance_id, name)`. |
+| `handle` | `TEXT` | Its own name, chosen by the platform ("tom", "ava"): what the user writes after an @. `UNIQUE (owner_id, handle)`, so no two of a user's agents share one, in any chat. |
 | `status` | `TEXT` | `CHECK`: `idle`, `working`, `failed` or `stopped`. |
 | `session_id` | `TEXT`, nullable | OpenCode's ID for the agent's conversation, which is how the agent remembers earlier tasks. `NULL` until its first task. |
 | `task`, `background` | `TEXT`, `BOOLEAN` | The task it is on (or was last on), and whether the assistant is waiting for it. |
@@ -387,7 +408,16 @@ was given (`task`, `background`, `status`: `working`, `done`, `failed` or
 now; these rows say everything it has done.
 
 `agent_messages` holds questions one agent asked another that was busy:
-who it is for, who asked, the question, and when it was handed over.
+who it is for, who asked, the question, and when it was handed over. It also
+holds what the user wrote to an agent that was busy (`from_owner`), with the
+IDs of the files that came with it (`attachments`, a `UUID[]`) and the chat
+event it was (`chat_seq`), so that the answer can be shown as a reply to it.
+
+`attachments` holds the files put in chats, by the user or by agents, whole:
+`owner_id`, `chat_id` (both `ON DELETE CASCADE`), `name`, `content_type`,
+`size` and `data` (`BYTEA`), at most 10 MB each (the application's limit).
+Events refer to them by ID. A file uploaded and never sent stays until its
+chat is deleted.
 
 `architectures` holds the design of what a chat is building, one row per
 chat: `status` (`proposed` or `approved`) and `design`, a `JSONB` document of
@@ -838,9 +868,10 @@ is down for a long time is retried at most every 30 seconds.
 
 [internal/guest](../internal/guest) is everything `guestd` does.
 [cmd/guestd/main.go](../cmd/guestd/main.go) just reads the environment, wires
-`SIGTERM` to a context, and starts four things: the editor supervisor, the
-coding agent supervisor, the loop that keeps a copy of the team's record on
-disk and the machine's services running, and the tunnel loop.
+`SIGTERM` to a context, and starts five things: the editor supervisor, the
+coding agent supervisor, the link daemon's supervisor (section 25), the loop
+that keeps a copy of the team's record on disk and the machine's services
+running, and the tunnel loop.
 
 `guestd` runs as the unprivileged user `coder`, and so do the shells it
 starts. Users get root through `sudo`.
@@ -903,6 +934,23 @@ connection.
    close only the *write* side of the TCP connection, so the reply can still
    come back. When the machine's side closes, end the stream.
 
+### Files
+
+`Server.PutFile` and `Server.GetFile` ([files.go](../internal/guest/files.go))
+carry one file each way, whole, in one message: the user's files to a
+machine before its agent's task, and an agent's files (a mockup, a
+screenshot) to the chat. A path is absolute, or relative to the home folder
+(`~/` too). `PutFile` creates the folders it needs and writes beside the
+file then renames, so nothing ever reads half of one; `guestd` runs as
+`coder`, so the file is the user's. `GetFile` refuses a folder, a missing
+file (`NotFound`) and one over the size asked for (`FailedPrecondition`).
+Both ends raise gRPC's message limit to a little over the 10 MB a file may
+be (`guestapi.MaxMessageSize`). The hub's `PutFile` and `GetFile`
+([files.go](../internal/tunnel/files.go)) wait for the guest as opening a
+terminal does; a guest without them (an older image) answers
+`Unimplemented`, which the instance service reports as
+`ErrFilesUnsupported`.
+
 ### The editor
 
 `RunIDE` ([ide.go](../internal/guest/ide.go)) keeps code-server running,
@@ -943,6 +991,12 @@ theirs. The configuration says:
   own identity. The real key never reaches a machine (section 16).
 - **No other provider is enabled.** Without that line OpenCode quietly falls
   back to other providers it knows about, including a hosted one.
+- **The model's own limits**: the context window and longest reply from
+  `CODER_MODEL_CONTEXT` and `CODER_MODEL_OUTPUT`, which the server sets on
+  every new machine from `LLM_CONTEXT_WINDOW` and `LLM_MAX_OUTPUT`. A machine
+  made before 2026-10-19, or with nonsense in them, gets the old cautious
+  64,000 and 8,192, with which a long task is summarised part-way and the
+  agent forgets what it did.
 - **Every permission is granted, and asking questions is denied.** Nobody is
   watching the agent to approve a command, and a question would wait for
   ever. Questions for the user go through the assistant instead.
@@ -1369,15 +1423,26 @@ stop it.
 
 | Kind | Written when | Payload |
 |---|---|---|
-| `user` | the user sends a message | `text` |
-| `assistant` | the model replies | `text`, and `tool_calls`: what it wants done |
+| `user` | the user sends a message | `text`; `to`, the handles it was for when the user named agents; `attachments` |
+| `post` | an agent writes in the chat | who (`agent`, `role`, `machine`), `text`, `attachments`, `reply_to`, `question` and `options`, `preview`, `queued`, `failed` |
+| `assistant` | the model replies | `text`, and `tool_calls`: what it wants done; `reasoning`, what the model thought before replying |
 | `tool` | a tool finishes | `tool_call_id`, `name`, `content` (what the model is told), `failed`, and the `machine` it concerns |
 | `activity` | a coding agent does something | `tool_call_id`, `machine`, `text` such as "Writing api/main.py" |
 | `error` | a run fails or is stopped | `message`, `stopped` |
 
 The first three are the conversation the model sees. `history()` rebuilds it
 from the events before every call to the model; `activity` and `error` are
-for the person watching and are left out.
+for the person watching and are left out. `agent` and `post` events, and
+`user` events written to agents and not to the assistant, reach the model as
+messages marked "[From the platform": it reads them, and is told it need not
+act on them.
+
+A thinking model (DeepSeek's are, by default) streams its reasoning apart
+from its reply, as `reasoning_content`. It is kept in the `assistant` event
+and sent back with that message on every later call: DeepSeek requires it
+whenever tools are in use, and without it the model loses the thread between
+one tool call and the next. It is not drawn in the chat. Events from before
+2026-10-19 have none, and are sent as they are.
 
 The model's API refuses a conversation in which the assistant asked for a
 tool and no result follows. A run that was cut short leaves exactly that
@@ -1459,7 +1524,15 @@ a machine: that stays a decision the user makes with their own hands.
 The system prompt, in the same file, tells the model how to use these: that
 the coding agent knows nothing of the conversation and each task must stand
 alone, that servers must listen on `0.0.0.0` and be started in the
-background, that machines reach each other by name, and when to ask.
+background, that machines reach each other by name, and when to ask. Since
+2026-10-19 it also tells it to start every component's agent at once, in the
+background, never in stages (database, then backend, then frontend), with
+each task saying the same about every connection it touches, so that each
+side can be written against the other before either runs; and to ask for
+finished, working software, never "keep it minimal". The text before every
+task (`taskPreamble` in `fleet.go`) says the same from the agent's side:
+others are building at the same time, build against what the design says
+they offer, and retry, or wait up to ten minutes, for what is not up yet.
 
 The sizes and stacks it may use are written into the prompt from
 `instance.Powers()`, `instance.Disks()` and `instance.Stacks()`, so the model
@@ -1591,9 +1664,11 @@ With a repository per component, each machine holds its own.
 A design can include a CI component on its own machine. There is no CI
 engine in the platform: the model is told how to set one up from parts that
 exist. Each code machine serves its repositories with `git daemon`,
-registered as a service; the CI machine's agent clones them over the user's
-private network, runs each build and each test, and writes that down as a
-script it can run again. That makes CI as reliable as the agent that set it
+registered as a service, as part of its own build task; the CI machine's
+agent starts with the others, writes a script that clones them over the
+user's private network and runs each build and each test, waits for
+repositories that are not there yet, and is sent back to run it once every
+other agent has reported. That makes CI as reliable as the agent that set it
 up, which is a limit worth knowing.
 
 ### The reply, as it is written
@@ -1612,6 +1687,57 @@ each fragment belongs to. Two things are deliberate:
   the reply is complete it is stored as an `assistant` event and the draft is
   cleared, so a draft is never part of the history and a page opened later
   sees only finished messages.
+
+### The chat as a room
+
+A chat is shared by the user, the assistant and the agents
+([people.go](../internal/assistant/people.go)). It is meant to work as a
+project's channel: the assistant runs the project, and the user can talk to
+any agent directly.
+
+- **Names.** An agent has its job (`name`, "frontend"), which the assistant
+  chooses, and a name of its own (`handle`, "tom"), which the platform gives
+  it when it is created: the first of a fixed list of short names
+  ([handles.go](../internal/assistant/handles.go)) that none of the user's
+  agents has, then the list again with numbers. Two agents created at once
+  may be offered the same one; the unique index refuses the second, which
+  tries the next. Agents from before handles were given theirs by the
+  migration, in the order they were created. `assistant` is never given.
+- **Who a message is for.** `SendMessage` takes `to`, a list of handles. Left
+  out, it is the chat's agents the text mentions as `@handle` (a mention of
+  anyone else is just a word). With no agent named, or `assistant` named,
+  the message goes to the assistant as before: it claims the chat and starts
+  a run. Each agent named gets it as a task of its own, in the background,
+  whatever the chat's status: the user can write to an agent while the
+  assistant works.
+- **An agent's answer.** The task says the owner wrote to it directly, and
+  that its report will be posted as its reply. Its progress is recorded as
+  `activity` events under `direct-<seq>-<handle>`, `seq` being the user's
+  message, and its report as a `post` event with `reply_to` set to it. Such
+  a task does not wake the assistant.
+- **A busy agent** gets the message when its task ends. It is stored in
+  `agent_messages`, a `post` with `queued` says so, and when any task of
+  that agent ends (`followUp`), everything the user wrote to it meanwhile is
+  given to it as one task.
+- **Agents speak up.** Two tools on the team's MCP server
+  ([mcp.go](../internal/teamapi/mcp.go)): `post_to_chat`, to show the user
+  something, and `ask_owner`, to ask them to decide something with options.
+  Either can carry files from the machine (read with `GetFile`, section 12,
+  and stored as attachments) and a page the machine serves (a port and a
+  path). The agent names itself; the machine is known for certain. The
+  user's answer to a question is a message to that agent, so it comes back
+  to it as a new task: the tool tells the agent not to wait for it. Posts are
+  bounded like questions between agents: 40 per user in ten minutes.
+- **Files.** Uploaded first (`UploadAttachment`), then sent by ID with a
+  message. The assistant is told each file's name, type, size and ID, and is
+  shown the start of each text file (16 KB of each, 48 KB in all); it cannot
+  see pictures. It passes files on with `code_on_machine`'s `files`. Files
+  that go with a task, from the assistant or from the user, are put on the
+  machine with `PutFile` before the task is given, at
+  `/home/coder/.coder/attachments/<first 8 of the id>/<name>`, and the task
+  says where. A machine too old for `PutFile` gets the task with a note that
+  the files could not be put there. Names are cut to their last part, with
+  no leading dots and nothing unprintable.
 
 ### Agents
 
@@ -1800,7 +1926,7 @@ configured (section 12) to believe the control plane *is* its model provider:
                                 ▼   llmgateway
               1. is that a real machine?     instance.AuthenticateGuest
               2. is the assistant working on it right now?     Fleet.TaskActive
-              3. replace "model" with the configured one
+              3. replace "model" and "reasoning_effort" with the configured ones
               4. forward with the real key ──────────────────► DeepSeek
               5. stream the answer back as it arrives
 ```
@@ -1815,7 +1941,8 @@ configured (section 12) to believe the control plane *is* its model provider:
   With it, the gateway answers a machine only during a task the assistant
   gave it.
 - The machine doesn't choose the model: whatever name the request carries is
-  overwritten.
+  overwritten. Nor how hard it thinks: `reasoning_effort` is set to
+  `AGENT_REASONING_EFFORT` (`max` unless configured).
 - The response is copied through and flushed chunk by chunk, because it is a
   stream of small events and the agent acts on each as it arrives. Errors
   from the model (a rate limit, an empty balance) are passed on unchanged, so
@@ -1851,11 +1978,12 @@ stop too. Their files stay.
 
 ### What has not been verified
 
-The assistant has been run end to end against real machines and the real
-OpenCode, with a scripted stand-in for the model that speaks DeepSeek's API.
-That covers the mechanics, the API-description rule included (a backend
-registered without one, its agent told, the description added, the service
-registered again and the new program checked).
+The assistant is run end to end against real machines and the real
+OpenCode, with a scripted stand-in for the model that speaks DeepSeek's API
+(`tools/standin`; section 22). That covers the mechanics, the API-description
+rule included (a backend registered without one, its agent told, the
+description added, the service registered again and the new program
+checked).
 
 With the real model (DeepSeek) there has been one chat, on 2026-10-04. The
 first request was refused for a tool schema the stand-in had never checked
@@ -2085,10 +2213,12 @@ a copy of the database yields password hashes and token hashes only.
 - **Between a machine's web content and the app:** separate origins.
 - **Between one user's machines and another's:** each user's machines are on
   a Docker network of their own.
-- **Between the machine and the control plane:** machines call in for three
-  things only: to open their tunnel, to use the model while the assistant has
-  them working, and to read their owner's team record or add a note to it.
-  All other traffic is the control plane calling the machine.
+- **Between the machine and the control plane:** machines call in for four
+  things only: to open their tunnel, to attach their link, to use the model
+  while the assistant has them working, and to read their owner's team
+  record or add a note to it. All other traffic is the control plane calling
+  the machine. Each of the four is authenticated as the machine, with its
+  guest token.
 - **Between what the model says and what happens:** the model's output is
   treated as a request, not a command. Tool arguments are parsed and checked,
   names are resolved per owner, and anything the code doesn't recognise comes
@@ -2101,7 +2231,9 @@ a copy of the database yields password hashes and token hashes only.
   already control. It is still removed from the environment of shells and the
   editor so that it doesn't end up in pasted `env` output. Since the
   assistant exists it is also what a machine presents to the model gateway,
-  which is why the gateway only answers during a task (section 16).
+  which is why the gateway only answers during a task (section 16). The link
+  daemon is the one program `guestd` starts that is given it, because it
+  attaches as the machine.
 
 ## 21. Timeouts and limits
 
@@ -2114,6 +2246,11 @@ a copy of the database yields password hashes and token hashes only.
 | Tunnel keepalive interval / write timeout | 15 s / 10 s | `guestapi.MuxConfig` |
 | Guest dial timeout | 15 s | `guest.dialTimeout` |
 | Guest reconnect backoff | 1 s → 30 s, reset after 1 min connected | `guest` |
+| Link handshake: the daemon's hello, and its answer to the first ping | 10 s each | `linkgw.handshakeTimeout` |
+| Link keepalive interval / timeout, both ends | 20 s / 10 s | `linkgw`, `link/src/parent.rs` |
+| Link dial timeout / reconnect backoff | 15 s / 1 s → 30 s, reset after 1 min connected | `link/src/parent.rs`, `backoff.rs` |
+| Largest link frame | 256 KB | `linkapi.MaxFrame` |
+| Frames waiting to be sent to one machine's link | 64 | `link.backlog` |
 | Terminal auth message | 10 s | `wsgateway.helloTimeout` |
 | Terminal WebSocket ping | every 30 s, 10 s timeout | `wsgateway` |
 | Largest message from a browser | 1 MB | `wsgateway.maxMessageBytes` |
@@ -2129,6 +2266,10 @@ a copy of the database yields password hashes and token hashes only.
 | One request to the model for the assistant's next step | 5 min | `cmd/server` |
 | One coding task | 30 min | `assistant.taskTimeout` |
 | Runs started by background agents with no word from the user | 20 | `assistant.maxWakes` |
+| A file in a chat, or passed to or from a machine | 10 MB | `guestapi.MaxFileSize`, `assistant.MaxAttachmentSize` |
+| Files with one message / one agent's post | 10 / 5 | `assistant.maxAttachments`, `maxPostFiles` |
+| A text file's contents shown to the assistant | 16 KB each, 48 KB a message | `assistant.maxInlineText`, `maxInlineTotal` |
+| Agents' posts in chats | 40 per user in 10 min | `assistant.postLimit`, `postWindow` |
 | Agents in one listing | 100, working first | `store.maxAgentsListed` |
 | Machine ready for a task / agent starting once online | 90 s / 45 s | `assistant.readyTimeout`, `agentStartTimeout` |
 | One health check of an agent / other short calls to it | 3 s / 30 s | `assistant.healthTimeout`, `callTimeout` |
@@ -2156,8 +2297,11 @@ a copy of the database yields password hashes and token hashes only.
 
 ## 22. Tests
 
-Run with `make test` (`go test -race ./...`). They need no database and no
-Docker.
+Run with `make test` (`go test -race ./...`, the same for the stand-in
+described below, and `cargo test` for the link daemon: its reconnect waits, its handshake, the
+proof peers give each other, and two whole daemons with a stand-in control
+plane finding each other over real connections on this computer).
+They need no database and no Docker.
 
 | Package | What is tested | How |
 |---|---|---|
@@ -2180,16 +2324,28 @@ Docker.
 | `guest` | Services: restarted after exiting, given their environment, left alone when unchanged, replaced when changed, stopped when no longer wanted, children stopped with them | The real manager running real processes. |
 | `portproxy` | A path that leads to another machine, and that it grants no access of its own | The real proxy with a router of one route. |
 | `teamapi` | The MCP server: agreeing a protocol revision, notifications, the tool list and its schemas, each tool, a note attributed to the machine that sent it, protocol errors, credentials; and the files endpoint with its `ETag` | The real handlers behind a test server, spoken to as an MCP client would. |
+| `link` | The Hub: attached while serving, frames in order both ways, a machine that is not attached or not reading, a newer link replacing the old, ending with its context or a failed send, waiting for a link | The real Hub with in-memory streams. |
+| `linkgw` | A daemon attaching and being answered; wrong, unknown and missing credentials; a failure to check them; a first frame that is not hello; another revision of the protocol; a daemon that never answers or never speaks; the same machine attaching twice; a daemon vanishing; a frame over the limit | The real gRPC server over an in-memory connection, spoken to as a daemon would. |
+| `assistant` | The mesh: which machines a design makes peers, what each is told when a link attaches, a machine that does not exist yet, another owner's machine of the same name, a design only proposed, keys per mesh, what machines report | The real service with fakes. |
+| `guest` | The link daemon's environment: the machine's identity with the token once, other programs still without it, and a machine from before links | Plain functions. |
 
-The instance service, repositories, Docker provider and HTTP handlers were
-verified end to end against real Postgres and Docker while they were written,
-and so was the assistant, in a browser, against real machines running the
-real OpenCode with a stand-in for the model. Those checks are not kept as
-automated tests, and the tooling for them is not in the repository:
-[STATUS.md](STATUS.md#how-changes-were-tested) describes what it was, so it
-can be rebuilt. That is the largest gap in test coverage. The packages with
-no tests of their own are `store`, `wsgateway`, `sandbox/docker`,
-`middleware` and `config`; `httpapi` has almost none.
+The packages with no tests of their own are `store`, `wsgateway`,
+`sandbox/docker`, `middleware` and `config`; `httpapi` has almost none. What
+covers them is the end-to-end check, which is in the repository but apart
+from the product:
+
+- [`tools/standin`](../tools/standin/README.md) answers in place of the
+  model. It is a Go module of its own; nothing in `cmd/` or `internal/`
+  imports it, and the server reaches it only by being given its address
+  (`make run-standin`). As the assistant it designs and builds a small shop;
+  as a coding agent it does the work for real, with OpenCode's own tools.
+- [`tools/uicheck/build.mjs`](../tools/uicheck/README.md) signs up in a real
+  browser and follows that build on real machines, checking about eighty
+  things from the question to the page being served.
+
+It is run by hand, takes about six minutes, and needs Docker, Postgres and
+the machine images. [STATUS.md](STATUS.md#how-changes-were-tested) says how
+it was last run and what it does not cover.
 
 ## 23. Assumptions and known gaps
 
@@ -2297,4 +2453,190 @@ waiting to be fixed, in order.
 | change what a design can hold | `internal/assistant/design.go`, the tool's schema in `tools.go`, and the diagram in `web/src/components/architecture/` |
 | change how services are run on a machine | `internal/guest/services.go`, then `make images` |
 | give agents another tool for knowing about each other | `tools` and `call` in `internal/teamapi/mcp.go` |
+| change who a message goes to, how agents answer the user, or what they can post | `internal/assistant/people.go`; the tools in `internal/teamapi/mcp.go`; the transcript in `web/src/lib/chat.ts` and `web/src/components/assistant/transcript.tsx` |
+| change the names agents are given | the list in `internal/assistant/handles.go` |
+| change what files a chat takes, or where they go on a machine | `internal/assistant/attachments.go`; how they are served in `internal/httpapi/chats.go` |
 | change what agents can know about each other, or how the files read | `internal/assistant/team.go` |
+| change what the server and a machine's link daemon say to each other | `internal/linkapi/link.proto`, then `make proto` for the Go side and `make link` for the Rust side; handle the new frame in `internal/linkgw/server.go` and `link/src/parent.rs` |
+| change the link daemon | `link/src/`, then `make images` and new machines |
+| check a change end to end without the real model | `make standin`, `make run-standin`, then `node tools/uicheck/build.mjs`; a new step for the stand-in goes in `tools/standin/shop.go`, a new check in `build.mjs` |
+
+## 25. The link
+
+The distributed harness ([HARNESS.md](HARNESS.md)) has agents on different
+machines settle things between themselves and follow each other's progress.
+What carries that is a second connection from every machine: the **link**.
+So far it connects them: a machine's link attaches to the server, stays
+attached and comes back when it drops, and machines that a design connects
+open streams to each other directly. Nothing is said over any of it yet but
+greetings, proofs and pings.
+
+```
+ machine                                            server
+ ───────                                            ──────
+ linkd (Rust)  ── gRPC over HTTP/2, one stream ──►  linkgw :8081 ──► link.Hub
+   started and kept up by guestd                      checks the machine's credentials
+```
+
+### Why a second connection, and why Rust
+
+The tunnel (section 11) is the server reaching *into* a machine: it is the
+gRPC client, and it opens a stream when it wants a terminal or a port. The
+link is the opposite kind of thing: one stream that stays open, on which
+either end speaks whenever it has something to say, and which the daemon
+will later open to the owner's other machines as well. That is its own
+protocol, so it is its own connection.
+
+It is Rust because it sits on every machine beside the user's own work, for
+as long as the machine runs, and should cost next to nothing there. Measured
+in a machine: a static binary of 1.25 MB and 1.3 MB of memory. `guestd`, in
+Go, is 12 MB and about 13 MB.
+
+### The protocol
+
+[internal/linkapi/link.proto](../internal/linkapi/link.proto) is the whole of
+it. The Go code beside it is generated by `make proto`; the Rust code is
+generated from the same file each time `linkd` is built
+([link/build.rs](../link/build.rs)), so the two ends cannot drift apart.
+
+One call, `Channel`, a stream of `Frame` in each direction. A frame has an
+`id` if it expects an answer, a `reply_to` if it is one, and a body, which
+so far is one of three: `Hello` (what the sender is, and which revision of
+the protocol it speaks), `Ping`, `Pong`, and three for the mesh described below (`Peers`, `Proof`,
+`Status`). A node ignores a kind of frame
+it does not know, which is what lets the protocol grow without every machine
+being rebuilt at once.
+
+### Attaching
+
+1. `linkd` starts with `CODER_LINK_URL`, `CODER_INSTANCE_ID` and
+   `CODER_GUEST_TOKEN`. It dials the URL and calls `Channel`, with
+   `authorization: Bearer <instance id>.<guest token>` in the call's
+   metadata: the same credential the machine presents to the model gateway
+   and the team API.
+2. `Server.Channel` ([linkgw](../internal/linkgw/server.go)) checks it with
+   `instance.AuthenticateGuest`. A wrong token ends the call with
+   `Unauthenticated`; a database that could not be asked ends it with
+   `Internal`, so a daemon is never told its credentials are wrong when it
+   is the server that is in trouble.
+3. Each side sends `Hello` first. The server ends the call if the daemon's
+   is not the first frame, or names another revision.
+4. The server sends a `Ping` and waits for its `Pong`. Only a link that
+   answers is advertised, as with a newly connected guest.
+5. The stream is handed to `Hub.Serve`, which blocks until it ends.
+
+Each step of the handshake has ten seconds.
+
+### The Hub
+
+[link.Hub](../internal/link/hub.go) is a map from instance ID to that
+machine's attached link, modelled on the tunnel's Hub.
+
+- **One sender.** A gRPC stream takes one sender at a time. `Serve` is that
+  sender: everything else puts frames on a queue with `Send`.
+- **Nothing waits, and nothing grows.** The queue holds 64 frames. `Send`
+  to a machine that is not attached, or whose queue is full, returns an
+  error at once. A frame that was queued can still be lost if the stream
+  drops first; whoever needs to know a frame arrived will ask for an answer
+  to it.
+- **In order.** Frames from a machine are passed to a handler one at a time.
+- **Replacement.** The same machine attaching again wins, and the older
+  stream's `Serve` returns `ErrReplaced`. On its way out it unregisters only
+  itself, never its replacement.
+- **Waiting.** `Wait` blocks until a machine's link attaches, woken by a
+  channel that is closed whenever one does.
+
+Like the tunnel's Hub it does no authorisation, and it holds everything in
+memory, which is one more thing that assumes a single server process.
+
+### Noticing a dead connection
+
+Both ends send HTTP/2 keepalive pings on a stream that has been quiet for 20
+seconds, and give up on it if a ping goes unanswered for 10. So a machine
+that vanished is detached within half a minute, and a daemon whose server
+vanished notices in the same time and starts dialling again. The server
+lets daemons ping no more often than every 10 seconds.
+
+### Reconnecting
+
+`linkd` follows the tunnel's policy exactly ([backoff.rs](../link/src/backoff.rs)):
+wait one second, double it up to thirty, and start again from one second
+after a connection that lasted more than a minute. It dials again whatever
+the reason the stream ended, a refusal included: a machine has no way to
+tell a token that is wrong for ever from a server that is being restored.
+
+### On the machine
+
+`RunLink` ([internal/guest/link.go](../internal/guest/link.go)) keeps `linkd`
+running with the same `supervise` loop as the editor and the coding agent.
+The daemon is given `guestd`'s environment and, unlike everything else
+`guestd` starts, the guest token: it is the machine speaking for itself.
+
+Two kinds of machine run none, and say so in their log: one created before
+links existed, which was never given `CODER_LINK_URL`, and one whose image
+has no `linkd`. Everything else on such a machine works as before.
+
+### Building it
+
+`linkd` is not built in the machine image's Dockerfile. `make link` builds
+it on the host with Cargo, as a static binary for
+`<processor>-unknown-linux-musl`, and copies it to
+`images/workspace/bin/linkd`, where the Dockerfile picks it up; `make image`
+and `make images` run it first. This needs Rust with that target, and
+`protoc`:
+
+```bash
+rustup target add x86_64-unknown-linux-musl
+```
+
+The release profile is set for size (`opt-level = "z"`, link-time
+optimisation, one codegen unit, `panic = "abort"`, stripped). It uses `tonic`
+with only its client half, and `tokio` with one thread.
+
+### Machines finding each other
+
+A design's connections say which machines work together. The assistant
+turns that into a **mesh** for each chat with an approved design
+([mesh.go](../internal/assistant/mesh.go)): for every machine, the machines
+its components have a connection with, in either direction.
+
+- **Telling them.** Whenever a link attaches, and whenever a design is
+  approved or corrected, every attached machine of that owner is sent a
+  `Peers` frame: for each mesh it is in, the mesh's key and its peers, each
+  with an ID and an address (`http://<machine name>:7600`, on the owner's
+  private network). It replaces what the machine was told before. A machine
+  the design names but nobody has made yet is left out, and its peers are
+  told again when it attaches.
+- **The key.** Each mesh has a random 32-byte key, made the first time it
+  is needed and held in the server's memory only. After a restart machines
+  are given new ones and prove themselves again, which takes a few seconds.
+- **Who dials.** Of two machines the one with the smaller ID dials the
+  other, so there is one stream between them. `linkd` listens for peers on
+  port 7600 ([peer.rs](../link/src/peer.rs)).
+- **Proving.** Neither has a credential the other can check, so each sends
+  a nonce in its hello and answers the other's with an HMAC under the
+  mesh's key, over its role, both IDs, the mesh and the nonce
+  ([proof.rs](../link/src/proof.rs)). The key never crosses the wire. The
+  side that accepted proves itself first, and answers only a machine the
+  control plane named as its peer.
+- **Reporting.** Each machine sends the control plane a `Status` saying
+  which peers it has a proven stream with, on attaching and on every
+  change. The server keeps the latest and logs changes. A frame that
+  arrives before the daemon's first pong is kept and dealt with once the
+  link is attached; refusing it was a bug that made links take half a
+  minute to come back.
+
+Nothing is sent between machines yet but greetings, proofs and pings.
+
+### What it does not do yet
+
+- Nothing in the server sends a frame down a link except the handshake and
+  `Peers`, and nothing shows a user which machines are linked.
+- Machines say nothing to each other yet, and the coding agent has no tools
+  for any of this.
+- The connections are not encrypted by `linkd` itself. In development they
+  run over the Docker bridge; in production the one to the server would sit
+  behind whatever terminates TLS, which `linkd` cannot yet dial.
+
+[HARNESS.md](HARNESS.md#order-of-work-and-where-it-stands) says what comes
+next.

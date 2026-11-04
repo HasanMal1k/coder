@@ -45,6 +45,7 @@ type fakeTeams struct {
 	notes    []string
 	asked    []string
 	services []string
+	posts    []assistant.AgentPost
 	// noted is each time a machine asked for its record, and what it said
 	// it was running.
 	noted []noted
@@ -89,6 +90,11 @@ func (f *fakeTeams) AskAgent(_ context.Context, ownerID, fromMachine, fromAgent,
 func (f *fakeTeams) RunService(_ context.Context, machine *store.Instance, name, command, directory string, port int) (string, error) {
 	f.services = append(f.services, fmt.Sprintf("%s|%s|%s|%s|%d", machine.Name, name, command, directory, port))
 	return "It is up and answering.", nil
+}
+
+func (f *fakeTeams) PostToChat(_ context.Context, machine *store.Instance, post assistant.AgentPost) (string, error) {
+	f.posts = append(f.posts, post)
+	return "Posted.", nil
 }
 
 func (f *fakeTeams) StopService(_ context.Context, machine *store.Instance, name string) (string, error) {
@@ -224,7 +230,7 @@ func TestToolsAreListedWithSchemas(t *testing.T) {
 			t.Errorf("tool %v: required = %v, want a list (clients reject null)", tool["name"], schema["required"])
 		}
 	}
-	for _, want := range []string{"list_machines", "list_agents", "get_agent", "get_architecture", "ask_agent", "run_service", "stop_service", "read_notes", "share_note"} {
+	for _, want := range []string{"list_machines", "list_agents", "get_agent", "get_architecture", "ask_agent", "run_service", "stop_service", "read_notes", "share_note", "post_to_chat", "ask_owner"} {
 		if !names[want] {
 			t.Errorf("no tool called %s", want)
 		}
@@ -322,6 +328,34 @@ func TestAgentsAskEachOtherAndKeepProgramsRunning(t *testing.T) {
 	design, _ := callTool(t, server, "get_architecture", nil)
 	if !strings.Contains(design, "# Architecture") || !strings.Contains(design, "# Connections of `web`") {
 		t.Errorf("get_architecture = %q", design)
+	}
+}
+
+func TestAnAgentWritesInTheChat(t *testing.T) {
+	server, teams := newServer(t)
+
+	// Lists as models give them: an array, and one path by itself.
+	status, out := rpc(t, server, machineKey, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ask_owner","arguments":{"agent_name":"tom","question":"Which one?","options":["Minimal","Playful"],"files":["a.png","b.png"],"port":3000,"path":"/mockups"}}}`)
+	if status != 200 || out["error"] != nil {
+		t.Fatalf("ask_owner: %d %v", status, out)
+	}
+	if said, isError := callTool(t, server, "post_to_chat", map[string]string{"agent_name": "tom", "text": "Look", "files": "shot.png"}); isError || said != "Posted." {
+		t.Errorf("post_to_chat = %q (error: %v)", said, isError)
+	}
+	if said, isError := callTool(t, server, "post_to_chat", map[string]string{"agent_name": "tom", "text": "Look", "port": "soon"}); !isError || !strings.Contains(said, "must be a number") {
+		t.Errorf("a port that is not a number = %q (error: %v)", said, isError)
+	}
+
+	if len(teams.posts) != 2 {
+		t.Fatalf("%d posts", len(teams.posts))
+	}
+	ask, post := teams.posts[0], teams.posts[1]
+	if !ask.Question || ask.Text != "Which one?" || ask.Agent != "tom" || ask.Port != 3000 || ask.Path != "/mockups" ||
+		len(ask.Options) != 2 || len(ask.Files) != 2 || ask.Files[1] != "b.png" {
+		t.Errorf("ask_owner gave %+v", ask)
+	}
+	if post.Question || post.Text != "Look" || len(post.Files) != 1 || post.Files[0] != "shot.png" {
+		t.Errorf("post_to_chat gave %+v", post)
 	}
 }
 

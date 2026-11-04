@@ -2,7 +2,7 @@
 
 import { MessageSquareDashedIcon, TriangleAlertIcon, WifiOffIcon } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   approveArchitecture,
@@ -11,17 +11,26 @@ import {
   deleteChat,
   errorMessage,
   sendMessage,
+  uploadAttachment,
   type Chat,
 } from "@/lib/api";
 import { useAgents } from "@/lib/agents";
-import { agentChanges, buildTranscript, chatMachines, machineChanges, useChat } from "@/lib/chat";
-import { displayStatus, useInstances } from "@/lib/instances";
+import {
+  agentChanges,
+  buildTranscript,
+  chatMachines,
+  machineChanges,
+  recipientsOf,
+  useChat,
+} from "@/lib/chat";
+import { useInstances } from "@/lib/instances";
 import { cn } from "@/lib/utils";
-import { StatusDot } from "../status";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { Skeleton } from "../ui/skeleton";
 import { useAssistant } from "./assistant-provider";
-import { Composer } from "./composer";
+import { usePendingFiles } from "./attachments";
+import { Composer, type ComposerHandle } from "./composer";
+import { ChatPeople, useChatPeople } from "./people";
 import { Transcript } from "./transcript";
 
 /** How close to the bottom counts as "reading the latest", in pixels. */
@@ -56,16 +65,22 @@ export function NewConversation({ onStarted }: { onStarted: (chat: Chat) => void
   const { info, refreshChats } = useAssistant();
   const [draft, setDraft] = useState("");
   const [starting, setStarting] = useState(false);
+  // There is no chat to upload to yet: files wait until it is made.
+  const pending = usePendingFiles();
 
   async function start() {
     const text = draft.trim();
-    if (!text) return;
+    if (!text && pending.files.length === 0) return;
 
     setStarting(true);
     let created: Chat | null = null;
     try {
       created = await createChat();
-      await sendMessage(created.id, text);
+      const chatId = created.id;
+      const uploaded = await Promise.all(
+        pending.files.map((f) => uploadAttachment(chatId, f.file)),
+      );
+      await sendMessage(chatId, text, { attachments: uploaded.map((a) => a.id) });
       refreshChats();
       onStarted(created);
     } catch (err) {
@@ -102,6 +117,9 @@ export function NewConversation({ onStarted }: { onStarted: (chat: Chat) => void
           working={false}
           disabled={disabled}
           placeholder="A website with a backend and a frontend…"
+          files={pending.files}
+          onAddFiles={pending.add}
+          onRemoveFile={pending.remove}
           roomy
           note={
             info?.model && (
@@ -159,6 +177,10 @@ export function Conversation({
 
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const composer = useRef<ComposerHandle>(null);
+  const members = useChatPeople(id);
+  const upload = useCallback((file: File) => uploadAttachment(id, file), [id]);
+  const pending = usePendingFiles(upload);
 
   const items = useMemo(() => buildTranscript(events), [events]);
 
@@ -212,11 +234,17 @@ export function Conversation({
     if (missing) onMissing?.();
   }, [missing, onMissing]);
 
-  async function send(text: string, fromDraft: boolean) {
+  async function send(text: string, fromDraft: boolean, to?: string[]) {
     setSending(true);
     try {
-      await sendMessage(id, text);
-      if (fromDraft) setDraft("");
+      const attachments = fromDraft
+        ? pending.files.flatMap((f) => (f.attachment ? [f.attachment.id] : []))
+        : [];
+      await sendMessage(id, text, { to, attachments });
+      if (fromDraft) {
+        setDraft("");
+        pending.clear();
+      }
       stick.current = true;
     } catch (err) {
       toast.error("Couldn't send your message", { description: errorMessage(err) });
@@ -260,11 +288,20 @@ export function Conversation({
   }
 
   const status = chat?.status ?? "idle";
-  const working = status === "running" || sending;
+  // Who what is typed will go to. Written only to agents, it can be sent
+  // while the assistant works: it doesn't wait on the assistant.
+  const handles = members.flatMap((m) => (m.kind === "agent" ? [m.handle] : []));
+  const to = recipientsOf(draft, handles);
+  const toAgentsOnly = !to.assistant;
+  const working = (status === "running" && !toAgentsOnly) || sending;
 
   return (
     <>
-      <ChatMachines items={items} />
+      <ChatPeople
+        members={members}
+        machines={chatMachines(items)}
+        onMention={(handle) => composer.current?.mention(handle)}
+      />
 
       <div
         ref={scroller}
@@ -273,7 +310,11 @@ export function Conversation({
           stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_DISTANCE;
         }}
         // With no line under the header, what scrolls up fades out beneath it.
-        className="min-h-0 flex-1 overflow-y-auto [mask-image:linear-gradient(to_bottom,transparent,black_1rem)]"
+        // The browser's own scroll anchoring is off: pictures load after the
+        // chat has reached its end, and the browser would move the view to
+        // keep what was showing in place, which reads as the user scrolling
+        // up. Staying at the end is done above.
+        className="min-h-0 flex-1 overflow-y-auto [overflow-anchor:none] [mask-image:linear-gradient(to_bottom,transparent,black_1rem)]"
       >
         <div
           className={cn(
@@ -289,12 +330,15 @@ export function Conversation({
             </div>
           ) : (
             <Transcript
+              chatId={id}
               items={items}
               status={status}
               draft={writing}
               compact={compact}
-              onAnswer={(answer) => send(answer, false)}
+              members={members}
+              onAnswer={(answer) => send(answer, false, ["assistant"])}
               onApprove={approve}
+              onWriteTo={(handle, text) => send(text, false, [handle])}
             />
           )}
         </div>
@@ -317,6 +361,7 @@ export function Conversation({
           {info?.enabled === false && <NotSetUp />}
 
           <Composer
+            ref={composer}
             value={draft}
             onChange={setDraft}
             onSend={() => send(draft.trim(), true)}
@@ -324,47 +369,27 @@ export function Conversation({
             working={working}
             disabled={chat === null || info?.enabled === false}
             placeholder={
-              status === "waiting" ? "Answer, or say what to change…" : "Build or change something…"
+              status === "waiting"
+                ? "Answer, or say what to change…"
+                : handles.length > 0
+                  ? `Write to the assistant, or @${handles[0]}…`
+                  : "Build or change something…"
             }
+            note={
+              to.agents.length > 0 &&
+              (toAgentsOnly
+                ? `Goes to ${to.agents.map((h) => "@" + h).join(" and ")} directly, not to the assistant.`
+                : `Goes to the assistant and to ${to.agents.map((h) => "@" + h).join(" and ")}.`)
+            }
+            members={members}
+            files={pending.files}
+            onAddFiles={pending.add}
+            onRemoveFile={pending.remove}
+            sendBlocked={pending.uploading}
           />
         </div>
       </div>
     </>
-  );
-}
-
-/**
- * The machines this chat has made or worked on, with whether each is running
- * right now: the state of the world next to the story of how it got there.
- */
-function ChatMachines({ items }: { items: ReturnType<typeof buildTranscript> }) {
-  const { instances, pending } = useInstances();
-
-  // Only machines that still exist: one deleted since has nothing to show.
-  const machines = chatMachines(items).flatMap((machine) => {
-    const instance = instances?.find((i) => i.id === machine.id);
-    return instance ? [instance] : [];
-  });
-
-  if (machines.length === 0) return null;
-
-  return (
-    <ul
-      aria-label="Machines in this chat"
-      className="flex shrink-0 flex-wrap items-center gap-1.5 px-3 pb-2 sm:px-4"
-    >
-      {machines.map((instance) => (
-        <li key={instance.id}>
-          <Link
-            href={`/instances/${instance.id}`}
-            className="flex items-center gap-2 rounded-md bg-card py-1 pr-3 pl-2.5 text-xs transition-colors outline-none hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50"
-          >
-            <StatusDot status={displayStatus(instance, pending[instance.id])} />
-            <span className="font-mono">{instance.name}</span>
-          </Link>
-        </li>
-      ))}
-    </ul>
   );
 }
 

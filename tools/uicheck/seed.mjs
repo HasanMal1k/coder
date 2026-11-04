@@ -8,6 +8,7 @@
 // clean.mjs removes the account. The server must be running.
 import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
+import { deflateSync } from "node:zlib";
 import { API, EMAIL, PASSWORD, psql } from "./common.mjs";
 
 async function post(path, body) {
@@ -61,11 +62,13 @@ const mref = (m) => ({ id: m.id, name: m.name, status: m.status, stack: m.stack,
 function chat(title, status, ago, build) {
   const id = randomUUID();
   const events = [];
+  // Returns the event's sequence number, for what refers back to it.
   const add = (kind, payload) => events.push({ kind, payload });
-  build(add, id);
+  // The chat first: files put in it while it is built refer to it.
   sql.push(
     `insert into chats (id, owner_id, title, status, created_at, updated_at) values ('${id}','${owner}',${q(title)},'${status}', now() - interval '${ago}', now() - interval '${ago}');`,
   );
+  build(add, id);
   events.forEach((e, i) =>
     sql.push(
       `insert into chat_events (chat_id, seq, kind, payload) values ('${id}', ${i + 1}, '${e.kind}', ${q(JSON.stringify(e.payload))}::jsonb);`,
@@ -102,6 +105,75 @@ const brokerage = {
 };
 
 const agentRows = [];
+
+// Files in a chat. Pictures are drawn here: two mockups as SVG, and a
+// "screenshot" as a PNG made pixel by pixel.
+function attachment(chatId, name, contentType, data) {
+  const id = randomUUID();
+  sql.push(
+    `insert into attachments (id, owner_id, chat_id, name, content_type, size, data) values ('${id}','${owner}','${chatId}',${q(name)},'${contentType}',${data.length},decode('${data.toString("base64")}','base64'));`,
+  );
+  return { id, name, content_type: contentType, size: data.length };
+}
+
+function png(width, height, paint) {
+  const crcTable = Array.from({ length: 256 }, (_, n) => {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    return c >>> 0;
+  });
+  const crc = (buf) => {
+    let c = 0xffffffff;
+    for (const b of buf) c = crcTable[(c ^ b) & 0xff] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  };
+  const chunk = (type, data) => {
+    const out = Buffer.alloc(12 + data.length);
+    out.writeUInt32BE(data.length, 0);
+    out.write(type, 4, "ascii");
+    data.copy(out, 8);
+    out.writeUInt32BE(crc(out.subarray(4, 8 + data.length)), 8 + data.length);
+    return out;
+  };
+  const raw = Buffer.alloc((width * 3 + 1) * height);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) raw.set(paint(x, y), y * (width * 3 + 1) + 1 + x * 3);
+  }
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header.set([8, 2, 0, 0, 0], 8);
+  return Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    chunk("IHDR", header),
+    chunk("IDAT", deflateSync(raw)),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+// A phone screenshot of a cramped trade form: rows of grey fields, too close together.
+const screenshot = png(180, 320, (x, y) => {
+  if (y < 28) return [32, 32, 36];
+  const row = Math.floor((y - 40) / 34);
+  const inField = row >= 0 && row < 6 && (y - 40) % 34 < 30 && x > 10 && x < 170;
+  if (inField) return row === 5 ? [230, 140, 60] : [58, 58, 64];
+  return [24, 24, 27];
+});
+
+function mockup(title, background, card, accent, radius) {
+  return Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="480" height="300" viewBox="0 0 480 300">
+  <rect width="480" height="300" fill="${background}"/>
+  <rect x="0" y="0" width="480" height="40" fill="${card}"/>
+  <text x="20" y="26" font-family="sans-serif" font-size="14" fill="${accent}">${title}</text>
+  <rect x="20" y="60" width="200" height="110" rx="${radius}" fill="${card}"/>
+  <rect x="240" y="60" width="220" height="110" rx="${radius}" fill="${card}"/>
+  <polyline points="250,150 290,120 330,135 370,95 410,110 450,80" fill="none" stroke="${accent}" stroke-width="3"/>
+  <rect x="20" y="190" width="440" height="90" rx="${radius}" fill="${card}"/>
+  <rect x="36" y="210" width="120" height="12" rx="3" fill="${accent}" opacity="0.8"/>
+  <rect x="36" y="234" width="300" height="10" rx="3" fill="#888" opacity="0.5"/>
+  <rect x="36" y="254" width="240" height="10" rx="3" fill="#888" opacity="0.5"/>
+</svg>`);
+}
 
 // 1. A finished build: every kind of entry a chat can hold.
 const built = chat("Crypto brokerage with a .NET API and a React app", "idle", "12 minutes", (add, chatId) => {
@@ -151,9 +223,25 @@ const built = chat("Crypto brokerage with a .NET API and a React app", "idle", "
   });
   add("tool", { tool_call_id: show.id, name: "show_preview", machine: mref(machines.web), content: "Shown." });
 
-  agentRows.push({ id: randomUUID(), chatId, machine: "db", name: "database", status: "idle", task: "Set up PostgreSQL for the brokerage: database, login and tables.", background: false, activity: "", report: "PostgreSQL 16 is running on port 5432 and registered as the `postgresql` service.", ago: "40 minutes" });
-  agentRows.push({ id: apiAgent, chatId, machine: "api", name: "backend", status: "working", task: "Add price alerts: a table, two endpoints, and a check every minute.", background: true, activity: "Writing Brokerage.Api/Alerts/AlertService.cs", report: "", ago: "2 minutes" });
-  agentRows.push({ id: webAgent, chatId, machine: "web", name: "frontend", status: "failed", task: "Build the React app with Vite: markets list, trade form, portfolio and order history.", background: true, activity: "", report: "`npm run build` failed: src/pages/Trade.tsx(41,18): Property 'available' does not exist on type 'OrderError'.", ago: "14 minutes" });
+  // The user writes to the frontend's agent directly, with a screenshot.
+  const shot = attachment(chatId, "trade-form-on-phone.png", "image/png", screenshot);
+  const spec = attachment(chatId, "colours.md", "text/markdown; charset=utf-8", Buffer.from("# Colours\n\nKeep the orange for the Buy button only.\n"));
+  const asked = add("user", { text: "@max the trade form is cramped on a phone, see the screenshot. Can you give the fields more room?", to: ["max"], attachments: [shot, spec] });
+  for (const line of ["Reading src/pages/Trade.tsx", "Editing src/pages/Trade.tsx", "Running npm run build", "Committing: Give the trade form room on phones"]) add("activity", { tool_call_id: `direct-${asked}-max`, machine: "web", text: line });
+  add("post", { agent_id: webAgent, agent: "max", role: "frontend", machine: { id: machines.web.id, name: "web" }, reply_to: asked, text: "Done. On narrow screens the fields now stack with 12px between them, and the **Buy** button spans the full width. Committed as `Give the trade form room on phones`." });
+
+  // Then asks something only the user can decide, with two mockups.
+  const minimal = attachment(chatId, "dashboard-minimal.svg", "image/svg+xml", mockup("Minimal", "#f4f4f5", "#ffffff", "#18181b", 12));
+  const terminal = attachment(chatId, "dashboard-terminal.svg", "image/svg+xml", mockup("Terminal", "#0b0e11", "#161a1e", "#f0b90b", 2));
+  add("post", { agent_id: webAgent, agent: "max", role: "frontend", machine: { id: machines.web.id, name: "web" }, question: true, text: "Before I build the portfolio dashboard: which design language should it follow? I drew both, and the live versions are on the mockups page.", options: ["Minimal, light and roomy", "Dense, like a trading terminal"], attachments: [minimal, terminal], preview: { port: 3000, path: "/mockups", label: "the mockups" } });
+
+  // And asks the backend's agent something it is still working on.
+  const alerts = add("user", { text: "@ava how far along are the price alerts?", to: ["ava"] });
+  add("activity", { tool_call_id: `direct-${alerts}-ava`, machine: "api", text: "Reading Brokerage.Api/Alerts/AlertService.cs" });
+
+  agentRows.push({ id: randomUUID(), chatId, machine: "db", name: "database", handle: "tom", status: "idle", task: "Set up PostgreSQL for the brokerage: database, login and tables.", background: false, activity: "", report: "PostgreSQL 16 is running on port 5432 and registered as the `postgresql` service.", ago: "40 minutes" });
+  agentRows.push({ id: apiAgent, chatId, machine: "api", name: "backend", handle: "ava", status: "working", task: "Add price alerts: a table, two endpoints, and a check every minute.", background: true, activity: "Writing Brokerage.Api/Alerts/AlertService.cs", report: "", ago: "2 minutes" });
+  agentRows.push({ id: webAgent, chatId, machine: "web", name: "frontend", handle: "max", status: "idle", task: "A message from the owner: the trade form is cramped on a phone.", background: true, activity: "", report: "Done. On narrow screens the fields now stack with 12px between them.", ago: "3 minutes" });
 });
 sql.push(`insert into architectures (chat_id, owner_id, status, design) values ('${built}','${owner}','approved', ${q(JSON.stringify(brokerage))}::jsonb);`);
 
@@ -226,8 +314,8 @@ chat("Scrape the council's planning notices", "idle", "19 days", (add) => {
 for (const a of agentRows) {
   const done = a.status === "working" ? "null" : `now() - interval '${a.ago}'`;
   sql.push(
-    `insert into agents (id, owner_id, chat_id, instance_id, name, status, task, background, activity, report, started_at, finished_at, updated_at)
-     values ('${a.id}','${owner}','${a.chatId}','${machines[a.machine].id}',${q(a.name)},'${a.status}',${q(a.task)},${a.background},${q(a.activity)},${q(a.report)}, now() - interval '${a.ago}' - interval '6 minutes', ${done}, now() - interval '${a.ago}');`,
+    `insert into agents (id, owner_id, chat_id, instance_id, name, handle, status, task, background, activity, report, started_at, finished_at, updated_at)
+     values ('${a.id}','${owner}','${a.chatId}','${machines[a.machine].id}',${q(a.name)},${q(a.handle)},'${a.status}',${q(a.task)},${a.background},${q(a.activity)},${q(a.report)}, now() - interval '${a.ago}' - interval '6 minutes', ${done}, now() - interval '${a.ago}');`,
   );
 }
 for (const [m, name, command, dir, port] of [

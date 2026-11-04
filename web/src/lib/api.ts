@@ -250,7 +250,9 @@ type EventBase = { seq: number; created_at: string };
 /** A background agent has finished the task it was given. */
 export type AgentNews = {
   agent_id: string;
+  /** Its job ("frontend"), and its own name ("tom"), absent in older chats. */
   agent: string;
+  handle?: string;
   /** The call that started the agent's task. */
   tool_call_id: string;
   machine: { id: string; name: string };
@@ -353,7 +355,10 @@ export type AgentStatus = "idle" | "working" | "failed" | "stopped";
 /** A coding agent: a named worker inside one of the user's machines. */
 export type Agent = {
   id: string;
+  /** Its job in its chat, such as "frontend". */
   name: string;
+  /** Its own name, such as "tom": what the user calls it by, as @tom. */
+  handle: string;
   chat_id: string;
   machine: { id: string; name: string };
   status: AgentStatus;
@@ -381,10 +386,50 @@ export function stopAgent(id: string) {
   return request<void>("POST", `/agents/${id}/stop`, { auth: true });
 }
 
+/** A file put in a chat, by the user or by an agent. */
+export type Attachment = {
+  id: string;
+  name: string;
+  content_type: string;
+  size: number;
+};
+
+/** What the user wrote. */
+export type UserMessage = {
+  text: string;
+  /** Who it was for, by handle, when the user named agents ("assistant" too, if named). */
+  to?: string[];
+  attachments?: Attachment[];
+};
+
+/** Something an agent wrote in the chat. */
+export type AgentPost = {
+  agent_id: string;
+  /** Its own name ("tom"), and its job ("frontend"). */
+  agent: string;
+  role: string;
+  machine: { id: string; name: string };
+  text: string;
+  attachments?: Attachment[];
+  /** The user's message this answers. */
+  reply_to?: number;
+  /** A question for the user, with answers to choose from. */
+  question?: boolean;
+  options?: string[];
+  /** A page on its machine to open. */
+  preview?: { port: number; path?: string; label?: string };
+  /** It was busy: it reads the user's message when its task ends. */
+  queued?: boolean;
+  /** It could not answer; `text` says why. */
+  failed?: boolean;
+  stopped?: boolean;
+};
+
 /** One entry in a chat's history. */
 export type ChatEvent = EventBase &
   (
-    | { kind: "user"; payload: { text: string } }
+    | { kind: "user"; payload: UserMessage }
+    | { kind: "post"; payload: AgentPost }
     | { kind: "assistant"; payload: { text: string; tool_calls?: ToolCall[] } }
     | { kind: "tool"; payload: ToolResult }
     | { kind: "activity"; payload: { tool_call_id: string; machine: string; text: string } }
@@ -413,10 +458,55 @@ export function deleteChat(id: string) {
 
 /**
  * Sends a message to a chat. It resolves once the message is accepted; the
- * assistant's reply arrives afterwards, through `streamChat`.
+ * reply arrives afterwards, through `streamChat`. Without `to` it goes to
+ * the agents the text mentions (@tom), or to the assistant.
  */
-export function sendMessage(id: string, text: string) {
-  return request<void>("POST", `/chats/${id}/messages`, { auth: true, body: { text } });
+export function sendMessage(
+  id: string,
+  text: string,
+  options: { to?: string[]; attachments?: string[] } = {},
+) {
+  return request<void>("POST", `/chats/${id}/messages`, {
+    auth: true,
+    body: { text, ...options },
+  });
+}
+
+/** The largest file a chat takes, and how many go with one message. */
+export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+export const MAX_ATTACHMENTS = 10;
+
+/** Uploads a file to send in a chat; it is sent by giving its ID with a message. */
+export async function uploadAttachment(chatId: string, file: File) {
+  const form = new FormData();
+  form.append("file", file, file.name);
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_URL}/chats/${chatId}/attachments`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${currentToken()}` },
+      body: form,
+    });
+  } catch {
+    throw new ApiError(0, "Can't reach the server. Check your connection and that it is running.");
+  }
+  if (!response.ok) throw await failure(response, true);
+  return (await response.json()) as Attachment;
+}
+
+/** A file from a chat, as it was uploaded. */
+export async function fetchAttachment(chatId: string, id: string) {
+  let response: Response;
+  try {
+    response = await fetch(`${API_URL}/chats/${chatId}/attachments/${id}`, {
+      headers: { Authorization: `Bearer ${currentToken()}` },
+    });
+  } catch {
+    throw new ApiError(0, "Can't reach the server.");
+  }
+  if (!response.ok) throw await failure(response, true);
+  return response.blob();
 }
 
 /** Stops the assistant, or withdraws the question it is waiting on. */

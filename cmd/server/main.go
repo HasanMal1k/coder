@@ -15,6 +15,8 @@ import (
 	"github.com/HasanMal1k/coder/internal/config"
 	"github.com/HasanMal1k/coder/internal/httpapi"
 	"github.com/HasanMal1k/coder/internal/instance"
+	"github.com/HasanMal1k/coder/internal/link"
+	"github.com/HasanMal1k/coder/internal/linkgw"
 	"github.com/HasanMal1k/coder/internal/llmgateway"
 	"github.com/HasanMal1k/coder/internal/portproxy"
 	"github.com/HasanMal1k/coder/internal/sandbox/docker"
@@ -78,7 +80,10 @@ func run() error {
 		Provider:        "docker",
 		Image:           cfg.WorkspaceImage,
 		GuestConnectURL: cfg.GuestConnectURL,
+		LinkConnectURL:  cfg.LinkConnectURL,
 		IdleStopAfter:   cfg.IdleStopAfter,
+		ModelContext:    cfg.ModelContextWindow,
+		ModelOutput:     cfg.ModelMaxOutput,
 	})
 
 	// Nothing is in flight yet, so any instance still mid-operation was cut
@@ -116,10 +121,11 @@ func run() error {
 
 	fleet := assistant.NewFleet(instanceSvc, agentRepo)
 	assistantSvc := assistant.NewService(assistant.Stores{
-		Chats:    chatRepo,
-		Agents:   agentRepo,
-		Designs:  store.NewArchitectureRepository(pool),
-		Services: store.NewServiceRepository(pool),
+		Chats:       chatRepo,
+		Agents:      agentRepo,
+		Attachments: store.NewAttachmentRepository(pool),
+		Designs:     store.NewArchitectureRepository(pool),
+		Services:    store.NewServiceRepository(pool),
 	}, model, fleet)
 
 	// As with instances: a chat or an agent still marked as working was cut
@@ -142,9 +148,10 @@ func run() error {
 		Router: assistantSvc,
 	}, instanceSvc)
 	models := llmgateway.New(llmgateway.Config{
-		BaseURL: cfg.ModelBaseURL,
-		APIKey:  cfg.ModelAPIKey,
-		Model:   cfg.ModelName,
+		BaseURL:         cfg.ModelBaseURL,
+		APIKey:          cfg.ModelAPIKey,
+		Model:           cfg.ModelName,
+		ReasoningEffort: cfg.AgentReasoningEffort,
 	}, instanceSvc, fleet)
 
 	router := httpapi.NewRouter(httpapi.Deps{
@@ -173,10 +180,27 @@ func run() error {
 		},
 	}
 
-	serveErr := make(chan error, 1)
+	// The distributed harness: every machine's link daemon holds a stream
+	// open to this, on a port of its own because it speaks gRPC.
+	links := link.NewHub()
+	assistantSvc.UseLinks(links)
+	linkSrv := linkgw.New(instanceSvc, links, assistantSvc).GRPC()
+	linkListener, err := net.Listen("tcp", cfg.LinkAddr)
+	if err != nil {
+		return err
+	}
+	// Streams last as long as machines do, so there is nothing to wait for:
+	// stopping ends them, and the daemons dial again when a server is back.
+	defer linkSrv.Stop()
+
+	serveErr := make(chan error, 2)
 	go func() {
 		log.Printf("listening on :%s", cfg.Port)
 		serveErr <- srv.ListenAndServe()
+	}()
+	go func() {
+		log.Printf("listening for machines' links on %s", cfg.LinkAddr)
+		serveErr <- linkSrv.Serve(linkListener)
 	}()
 
 	select {

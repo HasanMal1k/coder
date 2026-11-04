@@ -356,6 +356,14 @@ A chat is a list of **events**. You send a message, and then follow the
 events that result: the work happens on the server after the request that
 sent the message has returned, and carries on if the client disconnects.
 
+A chat is shared by the user, the assistant and the coding agents the
+assistant has set to work. Each agent has a name of its own, such as `tom`
+(its `handle`), unique among the user's agents. A message goes to the
+assistant, unless it is addressed to agents: then each of them gets it as a
+task and its answer is posted in the chat, and the assistant only reads it.
+Agents also write in the chat themselves (`post` events), and ask the user
+questions there.
+
 ### `GET /assistant` 🔒
 
 ```json
@@ -381,10 +389,35 @@ returns `503`.
 | Status | Meaning |
 |---|---|
 | `idle` | Nothing in progress. A message can be sent. |
-| `running` | The assistant is working. Messages are refused; it can be cancelled. |
-| `waiting` | The assistant asked a question. The next message is the answer. |
+| `running` | The assistant is working. Messages to it are refused (messages to agents are not); it can be cancelled. |
+| `waiting` | The assistant asked a question. The next message to the assistant is the answer. |
 
 The title is the first line of the first message.
+
+A message:
+
+```json
+{ "text": "@tom the form is cramped on a phone", "to": ["tom"], "attachments": ["0c5e…"] }
+```
+
+- `text` is at most 20000 characters, and may be empty if there are files.
+- `to` names who it is for, by handle; `assistant` is the assistant. Left
+  out, it is the agents of the chat that the text mentions as `@handle`, or
+  the assistant if it mentions none. A mention of a name nobody in the chat
+  has is just text; a name in `to` that isn't the chat's is a `400`.
+- `attachments` are the IDs of files uploaded to this chat beforehand, at
+  most 10.
+
+A message to agents does not touch the chat's status. Each agent named
+starts on it at once, or, if it is busy, gets it when its task ends; either
+way its answer arrives as a `post` event with `reply_to` set to the
+message's `seq`.
+
+A file is served with its type, and as a download (`Content-Disposition:
+attachment`) unless it is a PNG, JPEG, GIF or WebP picture, always with
+`Content-Security-Policy: sandbox` and `nosniff`: nothing uploaded can run
+as a page of this site. An SVG is a download too; shown in an `<img>`, it
+runs nothing.
 
 | Method and path | Does | Success | Errors |
 |---|---|---|---|
@@ -392,7 +425,9 @@ The title is the first line of the first message.
 | `POST /chats` 🔒 | Starts an empty chat. No body. | `201` the chat | |
 | `GET /chats/{id}` 🔒 | A chat and its whole history | `200` `{"chat": {...}, "events": [...]}` | `404` |
 | `DELETE /chats/{id}` 🔒 | Stops and deletes a chat. Machines it created are kept. | `204` | `404` |
-| `POST /chats/{id}/messages` 🔒 | Sends a message: `{"text": "..."}`, 1 to 20000 characters | `202`, no body | `400`, `404`, `409` while it is working, `503` if not enabled |
+| `POST /chats/{id}/messages` 🔒 | Sends a message, below | `202`, no body | `400`, `404`, `409` while the assistant is working (for a message to it), `503` if not enabled |
+| `POST /chats/{id}/attachments` 🔒 | Uploads a file to send: a multipart form with the file in `file`, at most 10 MB | `201` `{"id", "name", "content_type", "size", "created_at"}` | `400` empty, `404`, `413` too large |
+| `GET /chats/{id}/attachments/{attachment}` 🔒 | A file in the chat, as uploaded | `200` the file | `404` |
 | `POST /chats/{id}/cancel` 🔒 | Stops the assistant, or withdraws the question it is waiting on. Does nothing if it is idle. | `204` | `404` |
 
 ### Events
@@ -405,12 +440,13 @@ The title is the first line of the first message.
 
 | Kind | Payload | Meaning |
 |---|---|---|
-| `user` | `{"text"}` | Something the user said. |
-| `assistant` | `{"text", "tool_calls"}` | Something the assistant said (Markdown, may be empty) and what it set out to do. |
+| `user` | `{"text", "to", "attachments"}` | Something the user said. `to` lists the handles it was for, when the user named agents (with `assistant` if the assistant too); absent, it was for the assistant. `attachments` are `{"id", "name", "content_type", "size"}`, with `text` (the start of the file) for a text file. |
+| `post` | `{"agent_id", "agent", "role", "machine", "text", "attachments", "reply_to", "question", "options", "preview", "queued", "failed", "stopped"}` | An agent wrote in the chat. `agent` is its handle, `role` its job. `reply_to` is the user's message it answers. With `question`, it asks the user something, offering `options`; the answer is a message to it. `preview` is `{"port", "path", "label"}`, a page on its machine to open with `POST /instances/{machine.id}/ports/{port}/url`. `queued` says it was busy and gets the message when its task ends (no text). `failed` and `stopped` say it could not answer; `text` says why. |
+| `assistant` | `{"text", "tool_calls", "reasoning"}` | Something the assistant said (Markdown, may be empty) and what it set out to do. `reasoning`, when present, is what the model thought before it replied: kept to be sent back to the model, not meant to be shown. |
 | `tool` | `{"tool_call_id", "name", "content", "failed", "machine"}` | The outcome of one tool call. `machine` (`{"id", "name", "status", "cpus", "memory_mb", "disk_gb"}`) is present when it concerns one. |
-| `activity` | `{"tool_call_id", "machine", "text"}` | A line of progress from a step that takes a while: "Starting it" while a machine is created, "Writing api/main.py" during a coding task. |
+| `activity` | `{"tool_call_id", "machine", "text"}` | A line of progress from a step that takes a while: "Starting it" while a machine is created, "Writing api/main.py" during a coding task. An agent's work on a message from the user is recorded under `direct-<seq>-<handle>`, `seq` being the message's. |
 | `message` | `{"from", "to", "question", "answer", "queued", "failed"}` | One agent asked another something. `from` and `to` are `{"machine", "agent"}`. `queued` means the other was busy and will get the question later. |
-| `agent` | `{"agent_id", "agent", "tool_call_id", "machine", "content", "failed", "stopped"}` | A background agent finished. `tool_call_id` is the call that started it; `content` is its report, or why it failed. |
+| `agent` | `{"agent_id", "agent", "handle", "tool_call_id", "machine", "content", "failed", "stopped"}` | A background agent finished. `tool_call_id` is the call that started it; `content` is its report, or why it failed. |
 | `error` | `{"message", "stopped"}` | The run ended early. `stopped` is true when the user cancelled it. |
 
 A tool call, inside an `assistant` event:
@@ -428,7 +464,7 @@ event with its `tool_call_id` arrives. The tools:
 | `list_machines` | – | A line of progress. |
 | `create_machine` | `name`, and optionally `size`, `disk_gb`, `stack` | A line of progress, with its `activity` events as it goes; the result's `machine` says what was made. |
 | `start_machine`, `stop_machine` | `name` | A line of progress; the result's `machine.id` lets you link to the machine. |
-| `code_on_machine` | `machine`, `task`, `agent` (optional, default `coder`), `background` (optional) | The task, its `activity` events while it runs, and the result's `content`: the agent's report. With `background`, the result only says it started; it is working until an `agent` event with the same `tool_call_id` arrives, which carries the report. |
+| `code_on_machine` | `machine`, `task`, `agent` (optional, default `coder`; a job, or an agent's handle), `background` (optional), `files` (optional: IDs of files in the chat, put on the machine for the task) | The task, its `activity` events while it runs, and the result's `content`: the agent's report. With `background`, the result only says it started; it is working until an `agent` event with the same `tool_call_id` arrives, which carries the report. |
 | `list_agents` | – | A line of progress. |
 | `stop_agent` | `machine`, `agent` | A line of progress. |
 | `show_preview` | `machine`, `port`, `label` | A button. Open it with `POST /instances/{machine.id}/ports/{port}/url`, taking `machine.id` from the result. |
@@ -497,13 +533,16 @@ assistant takes it as what to change and proposes again.
 ### Agents
 
 A coding agent works inside one of the user's machines, on tasks from the
-assistant. Each has a name ("backend", "tests"), and several can work on one
+assistant or from the user. Each has a job ("backend", "tests"), which the
+assistant names, and a name of its own (`handle`: "tom", "ava"), which the
+platform gives it, unique among the user's agents. Several can work on one
 machine at once.
 
 ```json
 {
   "id": "6f0d…",
   "name": "tests",
+  "handle": "ava",
   "chat_id": "51d4…",
   "machine": { "id": "5357…", "name": "api" },
   "status": "working",
@@ -629,3 +668,9 @@ for (;;) {
 - `POST /llm/v1/chat/completions` is for machines too: the coding agent in a
   machine calls it for its model, authenticating as the machine. It answers
   only while the assistant has that machine working on a task.
+- Machines also hold a gRPC stream open to the server, on a port of its own
+  (`LINK_ADDR`, `:8081` by default): the `Link` service in
+  `internal/linkapi/link.proto`, called by each machine's link daemon with
+  the machine's credentials in the call's metadata. It is not for browsers
+  or for users' own programs. [BACKEND.md, section 25](BACKEND.md#25-the-link)
+  describes it.

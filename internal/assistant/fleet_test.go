@@ -174,6 +174,33 @@ type fakeInstances struct {
 	// programs is what else listens on the machine: port to the address
 	// that stands in for it.
 	programs map[int]string
+	// files is what has been put on machines, by "instance id:path", and
+	// putErr what putting one fails with.
+	files  map[string][]byte
+	putErr error
+}
+
+func (f *fakeInstances) PutFile(_ context.Context, id, path string, data []byte) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.putErr != nil {
+		return "", f.putErr
+	}
+	if f.files == nil {
+		f.files = map[string][]byte{}
+	}
+	f.files[id+":"+path] = data
+	return path, nil
+}
+
+func (f *fakeInstances) GetFile(_ context.Context, id, path string, maxSize int) ([]byte, string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	data, ok := f.files[id+":"+path]
+	if !ok {
+		return nil, "", instance.ErrFileNotFound
+	}
+	return data, path, nil
 }
 
 func (f *fakeInstances) add(owner, name, status string) *store.Instance {
@@ -332,7 +359,7 @@ func (s *memSessions) SetSession(_ context.Context, agentID, sessionID string) e
 // agentRef is an agent for a test task. Tests use the ID to tell
 // conversations apart.
 func agentRef(id string) AgentRef {
-	return AgentRef{ID: id, Name: "coder"}
+	return AgentRef{ID: id, Name: "coder", Handle: "tom"}
 }
 
 func newFleet(t *testing.T) (*Fleet, *fakeInstances, *fakeAgent) {
@@ -393,7 +420,7 @@ func TestRunTaskSendsTheTaskAndReturnsTheReport(t *testing.T) {
 	}
 
 	var got notes
-	report, err := fleet.RunTask(context.Background(), "alice", "api", agentRef("chat-1"), "build an app", got.add)
+	report, err := fleet.RunTask(context.Background(), "alice", "api", agentRef("chat-1"), "build an app", nil, got.add)
 	if err != nil {
 		t.Fatalf("RunTask: %v", err)
 	}
@@ -406,7 +433,7 @@ func TestRunTaskSendsTheTaskAndReturnsTheReport(t *testing.T) {
 	}
 
 	prompts := agent.prompts("ses_1")
-	if len(prompts) != 1 || !strings.HasSuffix(prompts[0], "The task:\n\nbuild an app") || !strings.Contains(prompts[0], `You are "coder", a coding agent on the machine "api"`) {
+	if len(prompts) != 1 || !strings.HasSuffix(prompts[0], "The task:\n\nbuild an app") || !strings.Contains(prompts[0], `You are tom, the "coder" agent: a coding agent on the machine "api"`) {
 		t.Errorf("the agent was sent %q", prompts)
 	}
 
@@ -423,7 +450,7 @@ func TestTasksForOneAgentShareASessionAndAgentsDoNot(t *testing.T) {
 	for _, step := range []struct{ agent, task string }{
 		{"agent-1", "first"}, {"agent-1", "second"}, {"agent-2", "other"},
 	} {
-		if _, err := fleet.RunTask(ctx, "alice", "api", agentRef(step.agent), step.task, ignore); err != nil {
+		if _, err := fleet.RunTask(ctx, "alice", "api", agentRef(step.agent), step.task, nil, ignore); err != nil {
 			t.Fatalf("RunTask(%s): %v", step.task, err)
 		}
 	}
@@ -441,7 +468,7 @@ func TestALostSessionIsReplaced(t *testing.T) {
 	instances.add("alice", "api", instance.StatusRunning)
 	ctx := context.Background()
 
-	fleet.RunTask(ctx, "alice", "api", agentRef("chat-1"), "first", ignore)
+	fleet.RunTask(ctx, "alice", "api", agentRef("chat-1"), "first", nil, ignore)
 
 	// The agent forgets the session, as it would if its data were wiped.
 	agent.mu.Lock()
@@ -449,7 +476,7 @@ func TestALostSessionIsReplaced(t *testing.T) {
 	agent.sessions["placeholder"] = nil
 	agent.mu.Unlock()
 
-	if _, err := fleet.RunTask(ctx, "alice", "api", agentRef("chat-1"), "second", ignore); err != nil {
+	if _, err := fleet.RunTask(ctx, "alice", "api", agentRef("chat-1"), "second", nil, ignore); err != nil {
 		t.Fatalf("RunTask after the session was lost: %v", err)
 	}
 	if got := agent.prompts("ses_2"); len(got) != 1 {
@@ -462,7 +489,7 @@ func TestAStoppedMachineIsStartedForATask(t *testing.T) {
 	instances.add("alice", "api", instance.StatusStopped)
 
 	var got notes
-	if _, err := fleet.RunTask(context.Background(), "alice", "api", agentRef("chat-1"), "go", got.add); err != nil {
+	if _, err := fleet.RunTask(context.Background(), "alice", "api", agentRef("chat-1"), "go", nil, got.add); err != nil {
 		t.Fatalf("RunTask: %v", err)
 	}
 
@@ -499,7 +526,7 @@ func TestAgentsOnOneMachineWorkAtOnce(t *testing.T) {
 	for _, name := range []string{"backend", "frontend", "tests"} {
 		wg.Go(func() {
 			ref := AgentRef{ID: "agent-" + name, Name: name}
-			if _, err := fleet.RunTask(context.Background(), "alice", "api", ref, "go", ignore); err != nil {
+			if _, err := fleet.RunTask(context.Background(), "alice", "api", ref, "go", nil, ignore); err != nil {
 				t.Errorf("RunTask(%s): %v", name, err)
 			}
 		})
@@ -541,7 +568,7 @@ func TestCancellingATaskStopsTheAgent(t *testing.T) {
 		cancel()
 	}()
 
-	_, err := fleet.RunTask(ctx, "alice", "api", agentRef("chat-1"), "long", ignore)
+	_, err := fleet.RunTask(ctx, "alice", "api", agentRef("chat-1"), "long", nil, ignore)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
@@ -560,7 +587,7 @@ func TestATaskThatTakesTooLongIsStopped(t *testing.T) {
 		return 200, reply("never seen")
 	}
 
-	_, err := fleet.RunTask(context.Background(), "alice", "api", agentRef("chat-1"), "long", ignore)
+	_, err := fleet.RunTask(context.Background(), "alice", "api", agentRef("chat-1"), "long", nil, ignore)
 	if err == nil || !strings.Contains(err.Error(), "took longer than") {
 		t.Fatalf("err = %v, want it to say the task took too long", err)
 	}
@@ -576,7 +603,7 @@ func TestAgentFailuresAreReported(t *testing.T) {
 	agent.work = func(context.Context, *fakeAgent, string, string) (int, string) {
 		return 200, `{"info":{"error":{"name":"APIError","data":{"message":"model returned 402: insufficient balance"}}},"parts":[]}`
 	}
-	_, err := fleet.RunTask(context.Background(), "alice", "api", agentRef("chat-1"), "go", ignore)
+	_, err := fleet.RunTask(context.Background(), "alice", "api", agentRef("chat-1"), "go", nil, ignore)
 	if err == nil || !strings.Contains(err.Error(), "insufficient balance") {
 		t.Errorf("err = %v, want the agent's own error", err)
 	}
@@ -584,7 +611,7 @@ func TestAgentFailuresAreReported(t *testing.T) {
 	agent.work = func(context.Context, *fakeAgent, string, string) (int, string) {
 		return 500, "boom"
 	}
-	_, err = fleet.RunTask(context.Background(), "alice", "api", agentRef("chat-2"), "go", ignore)
+	_, err = fleet.RunTask(context.Background(), "alice", "api", agentRef("chat-2"), "go", nil, ignore)
 	if err == nil || !strings.Contains(err.Error(), "500") || !strings.Contains(err.Error(), "boom") {
 		t.Errorf("err = %v, want the status and body", err)
 	}
@@ -601,7 +628,7 @@ func TestAMachineWithoutAnAgentIsExplained(t *testing.T) {
 			instances.dialErr = dialErr
 			fleet.agentStartTimeout = 50 * time.Millisecond
 
-			_, err := fleet.RunTask(context.Background(), "alice", "old", agentRef("chat-1"), "go", ignore)
+			_, err := fleet.RunTask(context.Background(), "alice", "old", agentRef("chat-1"), "go", nil, ignore)
 			if err == nil || !strings.Contains(err.Error(), "has no coding agent") {
 				t.Errorf("err = %v, want it to say the machine has no agent", err)
 			}
@@ -615,7 +642,7 @@ func TestAMachineThatNeverComesOnlineGivesUp(t *testing.T) {
 	instances.dialErr = instance.ErrGuestOffline
 	fleet.readyTimeout = 50 * time.Millisecond
 
-	_, err := fleet.RunTask(context.Background(), "alice", "api", agentRef("chat-1"), "go", ignore)
+	_, err := fleet.RunTask(context.Background(), "alice", "api", agentRef("chat-1"), "go", nil, ignore)
 	if err == nil || !strings.Contains(err.Error(), "did not become ready") {
 		t.Errorf("err = %v, want it to say the machine did not become ready", err)
 	}
@@ -639,7 +666,7 @@ func TestAnAgentThatIsSlowToStartIsWaitedFor(t *testing.T) {
 		instances.mu.Unlock()
 	}()
 
-	if _, err := fleet.RunTask(context.Background(), "alice", "api", agentRef("chat-1"), "go", ignore); err != nil {
+	if _, err := fleet.RunTask(context.Background(), "alice", "api", agentRef("chat-1"), "go", nil, ignore); err != nil {
 		t.Fatalf("RunTask: %v", err)
 	}
 }
@@ -651,7 +678,7 @@ func TestAHealthCheckThatGetsNoAnswerIsRetried(t *testing.T) {
 
 	finished := make(chan error, 1)
 	go func() {
-		_, err := fleet.RunTask(context.Background(), "alice", "api", agentRef("chat-1"), "go", ignore)
+		_, err := fleet.RunTask(context.Background(), "alice", "api", agentRef("chat-1"), "go", nil, ignore)
 		finished <- err
 	}()
 
@@ -721,7 +748,7 @@ func TestErrorsAreWordedForTheModel(t *testing.T) {
 		t.Errorf("unknown machine: %v", err)
 	}
 	// Another user's machine is as good as nonexistent.
-	if _, err := fleet.RunTask(ctx, "alice", "bobs", agentRef("chat-1"), "go", ignore); err == nil || !strings.Contains(err.Error(), "no machine called") {
+	if _, err := fleet.RunTask(ctx, "alice", "bobs", agentRef("chat-1"), "go", nil, ignore); err == nil || !strings.Contains(err.Error(), "no machine called") {
 		t.Errorf("another user's machine: %v", err)
 	}
 }
@@ -768,7 +795,7 @@ func TestReadLineSkipsLinesThatAreTooLong(t *testing.T) {
 	}
 
 	var got notes
-	if _, err := fleet.RunTask(context.Background(), "alice", "api", agentRef("chat-1"), "go", got.add); err != nil {
+	if _, err := fleet.RunTask(context.Background(), "alice", "api", agentRef("chat-1"), "go", nil, got.add); err != nil {
 		t.Fatalf("RunTask: %v", err)
 	}
 	if lines := got.all(); !equal(lines, []string{"Running ls"}) {

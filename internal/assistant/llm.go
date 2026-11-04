@@ -20,10 +20,14 @@ const maxToolCalls = 64
 // Message is one entry in the conversation sent to the model, in the shape
 // the OpenAI-compatible chat completions API uses (DeepSeek speaks it).
 type Message struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
+	Role    string `json:"role"`
+	Content string `json:"content"`
+	// ReasoningContent is what a thinking model reasoned before it replied.
+	// DeepSeek requires it back, on every later request of a conversation
+	// with tools, or the model loses the thread between tool calls.
+	ReasoningContent string     `json:"reasoning_content,omitempty"`
+	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string     `json:"tool_call_id,omitempty"`
 }
 
 // ToolCall is the model asking for a tool to be run.
@@ -149,9 +153,10 @@ func readWhole(body io.Reader, onText func(string)) (Message, error) {
 // characters at a time, and "index" says which call a fragment belongs to.
 func readStream(body io.Reader, onText func(string)) (Message, error) {
 	var (
-		text     strings.Builder
-		calls    []*ToolCall
-		finished bool
+		text      strings.Builder
+		reasoning strings.Builder
+		calls     []*ToolCall
+		finished  bool
 	)
 
 	reader := bufio.NewReaderSize(body, 64*1024)
@@ -179,8 +184,9 @@ func readStream(body io.Reader, onText func(string)) (Message, error) {
 		var chunk struct {
 			Choices []struct {
 				Delta struct {
-					Content   string `json:"content"`
-					ToolCalls []struct {
+					Content          string `json:"content"`
+					ReasoningContent string `json:"reasoning_content"`
+					ToolCalls        []struct {
 						Index    int          `json:"index"`
 						ID       string       `json:"id"`
 						Function FunctionCall `json:"function"`
@@ -200,6 +206,9 @@ func readStream(body io.Reader, onText func(string)) (Message, error) {
 		}
 
 		for _, choice := range chunk.Choices {
+			// Kept, not shown: the person sees the reply, not the thinking.
+			reasoning.WriteString(choice.Delta.ReasoningContent)
+
 			if piece := choice.Delta.Content; piece != "" {
 				text.WriteString(piece)
 				if onText != nil {
@@ -235,7 +244,7 @@ func readStream(body io.Reader, onText func(string)) (Message, error) {
 		return Message{}, errors.New("the model's reply was cut off")
 	}
 
-	msg := Message{Role: "assistant", Content: text.String()}
+	msg := Message{Role: "assistant", Content: text.String(), ReasoningContent: reasoning.String()}
 	for _, call := range calls {
 		if call.ID == "" {
 			// Results are matched to requests by ID, so every call needs one.

@@ -616,6 +616,209 @@ func (*PingResponse) Descriptor() ([]byte, []int) {
 	return file_guest_proto_rawDescGZIP(), []int{9}
 }
 
+// A path is absolute, or relative to the home folder.
+type PutFileRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	Data          []byte                 `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PutFileRequest) Reset() {
+	*x = PutFileRequest{}
+	mi := &file_guest_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PutFileRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PutFileRequest) ProtoMessage() {}
+
+func (x *PutFileRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_guest_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PutFileRequest.ProtoReflect.Descriptor instead.
+func (*PutFileRequest) Descriptor() ([]byte, []int) {
+	return file_guest_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *PutFileRequest) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *PutFileRequest) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+type PutFileResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Where the file was written, as an absolute path.
+	Path          string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PutFileResponse) Reset() {
+	*x = PutFileResponse{}
+	mi := &file_guest_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PutFileResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PutFileResponse) ProtoMessage() {}
+
+func (x *PutFileResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_guest_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PutFileResponse.ProtoReflect.Descriptor instead.
+func (*PutFileResponse) Descriptor() ([]byte, []int) {
+	return file_guest_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *PutFileResponse) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+type GetFileRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	MaxSize       uint64                 `protobuf:"varint,2,opt,name=max_size,json=maxSize,proto3" json:"max_size,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetFileRequest) Reset() {
+	*x = GetFileRequest{}
+	mi := &file_guest_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetFileRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetFileRequest) ProtoMessage() {}
+
+func (x *GetFileRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_guest_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetFileRequest.ProtoReflect.Descriptor instead.
+func (*GetFileRequest) Descriptor() ([]byte, []int) {
+	return file_guest_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *GetFileRequest) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *GetFileRequest) GetMaxSize() uint64 {
+	if x != nil {
+		return x.MaxSize
+	}
+	return 0
+}
+
+type GetFileResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Data  []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
+	// The path read, as an absolute path.
+	Path          string `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetFileResponse) Reset() {
+	*x = GetFileResponse{}
+	mi := &file_guest_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetFileResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetFileResponse) ProtoMessage() {}
+
+func (x *GetFileResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_guest_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetFileResponse.ProtoReflect.Descriptor instead.
+func (*GetFileResponse) Descriptor() ([]byte, []int) {
+	return file_guest_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *GetFileResponse) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+func (x *GetFileResponse) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
 var File_guest_proto protoreflect.FileDescriptor
 
 const file_guest_proto_rawDesc = "" +
@@ -647,11 +850,24 @@ const file_guest_proto_rawDesc = "" +
 	"\x04data\x18\x02 \x01(\fH\x00R\x04dataB\x05\n" +
 	"\x03msg\"\r\n" +
 	"\vPingRequest\"\x0e\n" +
-	"\fPingResponse2\xe9\x01\n" +
+	"\fPingResponse\"8\n" +
+	"\x0ePutFileRequest\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
+	"\x04data\x18\x02 \x01(\fR\x04data\"%\n" +
+	"\x0fPutFileResponse\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\"?\n" +
+	"\x0eGetFileRequest\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12\x19\n" +
+	"\bmax_size\x18\x02 \x01(\x04R\amaxSize\"9\n" +
+	"\x0fGetFileResponse\x12\x12\n" +
+	"\x04data\x18\x01 \x01(\fR\x04data\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path2\x81\x03\n" +
 	"\x05Guest\x12M\n" +
 	"\bTerminal\x12\x1d.coder.guest.v1.TerminalInput\x1a\x1e.coder.guest.v1.TerminalOutput(\x010\x01\x12N\n" +
 	"\aForward\x12\x1e.coder.guest.v1.ForwardRequest\x1a\x1f.coder.guest.v1.ForwardResponse(\x010\x01\x12A\n" +
-	"\x04Ping\x12\x1b.coder.guest.v1.PingRequest\x1a\x1c.coder.guest.v1.PingResponseB8Z6github.com/HasanMal1k/coder/internal/guestapi;guestapib\x06proto3"
+	"\x04Ping\x12\x1b.coder.guest.v1.PingRequest\x1a\x1c.coder.guest.v1.PingResponse\x12J\n" +
+	"\aPutFile\x12\x1e.coder.guest.v1.PutFileRequest\x1a\x1f.coder.guest.v1.PutFileResponse\x12J\n" +
+	"\aGetFile\x12\x1e.coder.guest.v1.GetFileRequest\x1a\x1f.coder.guest.v1.GetFileResponseB8Z6github.com/HasanMal1k/coder/internal/guestapi;guestapib\x06proto3"
 
 var (
 	file_guest_proto_rawDescOnce sync.Once
@@ -665,7 +881,7 @@ func file_guest_proto_rawDescGZIP() []byte {
 	return file_guest_proto_rawDescData
 }
 
-var file_guest_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_guest_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_guest_proto_goTypes = []any{
 	(*TerminalSize)(nil),    // 0: coder.guest.v1.TerminalSize
 	(*TerminalStart)(nil),   // 1: coder.guest.v1.TerminalStart
@@ -677,24 +893,32 @@ var file_guest_proto_goTypes = []any{
 	(*ForwardResponse)(nil), // 7: coder.guest.v1.ForwardResponse
 	(*PingRequest)(nil),     // 8: coder.guest.v1.PingRequest
 	(*PingResponse)(nil),    // 9: coder.guest.v1.PingResponse
+	(*PutFileRequest)(nil),  // 10: coder.guest.v1.PutFileRequest
+	(*PutFileResponse)(nil), // 11: coder.guest.v1.PutFileResponse
+	(*GetFileRequest)(nil),  // 12: coder.guest.v1.GetFileRequest
+	(*GetFileResponse)(nil), // 13: coder.guest.v1.GetFileResponse
 }
 var file_guest_proto_depIdxs = []int32{
-	0, // 0: coder.guest.v1.TerminalStart.size:type_name -> coder.guest.v1.TerminalSize
-	1, // 1: coder.guest.v1.TerminalInput.start:type_name -> coder.guest.v1.TerminalStart
-	0, // 2: coder.guest.v1.TerminalInput.resize:type_name -> coder.guest.v1.TerminalSize
-	4, // 3: coder.guest.v1.ForwardRequest.open:type_name -> coder.guest.v1.ForwardOpen
-	5, // 4: coder.guest.v1.ForwardResponse.opened:type_name -> coder.guest.v1.ForwardOpened
-	2, // 5: coder.guest.v1.Guest.Terminal:input_type -> coder.guest.v1.TerminalInput
-	6, // 6: coder.guest.v1.Guest.Forward:input_type -> coder.guest.v1.ForwardRequest
-	8, // 7: coder.guest.v1.Guest.Ping:input_type -> coder.guest.v1.PingRequest
-	3, // 8: coder.guest.v1.Guest.Terminal:output_type -> coder.guest.v1.TerminalOutput
-	7, // 9: coder.guest.v1.Guest.Forward:output_type -> coder.guest.v1.ForwardResponse
-	9, // 10: coder.guest.v1.Guest.Ping:output_type -> coder.guest.v1.PingResponse
-	8, // [8:11] is the sub-list for method output_type
-	5, // [5:8] is the sub-list for method input_type
-	5, // [5:5] is the sub-list for extension type_name
-	5, // [5:5] is the sub-list for extension extendee
-	0, // [0:5] is the sub-list for field type_name
+	0,  // 0: coder.guest.v1.TerminalStart.size:type_name -> coder.guest.v1.TerminalSize
+	1,  // 1: coder.guest.v1.TerminalInput.start:type_name -> coder.guest.v1.TerminalStart
+	0,  // 2: coder.guest.v1.TerminalInput.resize:type_name -> coder.guest.v1.TerminalSize
+	4,  // 3: coder.guest.v1.ForwardRequest.open:type_name -> coder.guest.v1.ForwardOpen
+	5,  // 4: coder.guest.v1.ForwardResponse.opened:type_name -> coder.guest.v1.ForwardOpened
+	2,  // 5: coder.guest.v1.Guest.Terminal:input_type -> coder.guest.v1.TerminalInput
+	6,  // 6: coder.guest.v1.Guest.Forward:input_type -> coder.guest.v1.ForwardRequest
+	8,  // 7: coder.guest.v1.Guest.Ping:input_type -> coder.guest.v1.PingRequest
+	10, // 8: coder.guest.v1.Guest.PutFile:input_type -> coder.guest.v1.PutFileRequest
+	12, // 9: coder.guest.v1.Guest.GetFile:input_type -> coder.guest.v1.GetFileRequest
+	3,  // 10: coder.guest.v1.Guest.Terminal:output_type -> coder.guest.v1.TerminalOutput
+	7,  // 11: coder.guest.v1.Guest.Forward:output_type -> coder.guest.v1.ForwardResponse
+	9,  // 12: coder.guest.v1.Guest.Ping:output_type -> coder.guest.v1.PingResponse
+	11, // 13: coder.guest.v1.Guest.PutFile:output_type -> coder.guest.v1.PutFileResponse
+	13, // 14: coder.guest.v1.Guest.GetFile:output_type -> coder.guest.v1.GetFileResponse
+	10, // [10:15] is the sub-list for method output_type
+	5,  // [5:10] is the sub-list for method input_type
+	5,  // [5:5] is the sub-list for extension type_name
+	5,  // [5:5] is the sub-list for extension extendee
+	0,  // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_guest_proto_init() }
@@ -725,7 +949,7 @@ func file_guest_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_guest_proto_rawDesc), len(file_guest_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   10,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

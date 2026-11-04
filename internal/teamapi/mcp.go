@@ -134,6 +134,31 @@ var tools = []tool{
 		}, "name"),
 	},
 	{
+		Name:        "post_to_chat",
+		Description: "Write in the project chat, under your name, for the owner to read: something to show them (a mockup, a screenshot, a page you serve) or to tell them. Files are read from this machine and shown in the chat, images as pictures. Your report already reaches whoever gave you the task, so use this for what the owner should see while you work, not for your report.",
+		InputSchema: schema(map[string]any{
+			"agent_name": text("Your own name, as given at the top of your task."),
+			"text":       text("What to say. Markdown is shown as such."),
+			"files":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Paths of files on this machine to put in the chat with it, at most 5, each at most 10 MB. Images (PNG, JPEG, SVG, GIF, WebP) are shown as pictures."},
+			"port":       text("The port of a page on this machine for the owner to open, if there is one: they get a button. It must listen on 0.0.0.0."),
+			"path":       text("The path of that page, such as /mockups/a.html. Defaults to /."),
+			"label":      text("A few words for the button, such as \"Mockup A\"."),
+		}, "agent_name", "text"),
+	},
+	{
+		Name:        "ask_owner",
+		Description: "Ask the owner, in the project chat, to decide something only they can: which design language to follow, which of two mockups, a trade-off that is theirs. Offer the answers as options; show what you are asking about with files or a page. Their answer does not come back in this call: it comes to you later, from them, as a new message. So if you cannot go on without it, end your task after asking and say in your report what you are waiting for.",
+		InputSchema: schema(map[string]any{
+			"agent_name": text("Your own name, as given at the top of your task."),
+			"question":   text("The question, in a sentence or two."),
+			"options":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Two to six answers to choose from, a few words each, your recommendation first. The owner can also write their own."},
+			"files":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Paths of files on this machine to show with the question, such as mockups, at most 5."},
+			"port":       text("The port of a page on this machine to show with the question, if there is one."),
+			"path":       text("The path of that page. Defaults to /."),
+			"label":      text("A few words for the button that opens it."),
+		}, "agent_name", "question"),
+	},
+	{
 		Name:        "read_notes",
 		Description: "Read the notes agents have left for each other, such as the shape of an API or a decision that was made.",
 		InputSchema: schema(map[string]any{
@@ -291,6 +316,27 @@ func plain(arguments map[string]json.RawMessage) map[string]string {
 	return out
 }
 
+// list reads an argument that is a list. Models give a JSON array, or
+// sometimes one string, or several on lines of their own.
+func list(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+
+	var items []string
+	if strings.HasPrefix(raw, "[") && json.Unmarshal([]byte(raw), &items) == nil {
+		return items
+	}
+
+	for _, line := range strings.Split(raw, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			items = append(items, line)
+		}
+	}
+	return items
+}
+
 // userError is a mistake in how a tool was called, worded for the agent.
 type userError string
 
@@ -326,6 +372,28 @@ func (h *Handler) call(ctx context.Context, machine *store.Instance, name string
 
 	case "stop_service":
 		return h.teams.StopService(ctx, machine, args["name"])
+
+	case "post_to_chat", "ask_owner":
+		post := assistant.AgentPost{
+			Agent:    args["agent_name"],
+			Text:     args["text"],
+			Files:    list(args["files"]),
+			Question: name == "ask_owner",
+			Options:  list(args["options"]),
+			Path:     args["path"],
+			Label:    args["label"],
+		}
+		if post.Question {
+			post.Text = args["question"]
+		}
+		if raw := strings.TrimSpace(args["port"]); raw != "" {
+			port, err := strconv.Atoi(raw)
+			if err != nil {
+				return "", userError("The port must be a number.")
+			}
+			post.Port = port
+		}
+		return h.teams.PostToChat(ctx, machine, post)
 	}
 
 	team, err := h.teams.Team(ctx, machine.OwnerID)

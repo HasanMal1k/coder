@@ -56,7 +56,7 @@ import {
 import { cn } from "@/lib/utils";
 
 /** A technology's mark, as Simple Icons draws it: one path on a 24 by 24 square. */
-type Mark = { title: string; path: string; hex: string };
+export type Mark = { title: string; path: string; hex: string };
 
 /**
  * The technologies recognised in what a component says it is made with, and
